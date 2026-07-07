@@ -33,54 +33,6 @@ def build_target_grid(width: int, height: int, margin: float) -> np.ndarray:
     return np.column_stack([grid_x.reshape(-1), grid_y.reshape(-1)])
 
 
-def solve_leaf(points: np.ndarray, target_points: np.ndarray, point_ids: np.ndarray, target_ids: np.ndarray, assignment: np.ndarray) -> None:
-    local_points = points[point_ids]
-    local_targets = target_points[target_ids]
-    diffs = local_points[:, None, :] - local_targets[None, :, :]
-    cost = np.sum(diffs * diffs, axis=2, dtype=np.float64)
-    _, col_ind, _ = megalap.linear_sum_assignment(cost)
-    assignment[point_ids] = target_ids[np.asarray(col_ind, dtype=np.int64)]
-
-
-def recursive_seed(
-    points: np.ndarray,
-    target_points: np.ndarray,
-    width: int,
-    height: int,
-    leaf_size: int = 8,
-) -> np.ndarray:
-    n = width * height
-    assignment = np.empty(n, dtype=np.int64)
-
-    def recurse(point_ids: np.ndarray, row0: int, rows: int, col0: int, cols: int) -> None:
-        if rows <= leaf_size and cols <= leaf_size:
-            target_rows = np.arange(row0, row0 + rows, dtype=np.int64)
-            target_cols = np.arange(col0, col0 + cols, dtype=np.int64)
-            grid_rows, grid_cols = np.meshgrid(target_rows, target_cols, indexing="ij")
-            target_ids = (grid_rows * width + grid_cols).reshape(-1)
-            solve_leaf(points, target_points, point_ids, target_ids, assignment)
-            return
-
-        if cols >= rows and cols > leaf_size:
-            left_cols = cols // 2
-            split_len = rows * left_cols
-            order = np.lexsort((points[point_ids, 1], points[point_ids, 0]))
-            sorted_ids = point_ids[order]
-            recurse(sorted_ids[:split_len], row0, rows, col0, left_cols)
-            recurse(sorted_ids[split_len:], row0, rows, col0 + left_cols, cols - left_cols)
-            return
-
-        top_rows = rows // 2
-        split_len = top_rows * cols
-        order = np.lexsort((points[point_ids, 0], points[point_ids, 1]))
-        sorted_ids = point_ids[order]
-        recurse(sorted_ids[:split_len], row0, top_rows, col0, cols)
-        recurse(sorted_ids[split_len:], row0 + top_rows, rows - top_rows, col0, cols)
-
-    recurse(np.arange(n, dtype=np.int64), 0, height, 0, width)
-    return assignment
-
-
 def lab_to_srgb(points: np.ndarray) -> np.ndarray:
     l = np.full(points.shape[0], 72.0, dtype=np.float64)
     a = (points[:, 0] * 2.0 - 1.0) * 80.0
@@ -186,7 +138,6 @@ def main() -> None:
     parser.add_argument("--image-width", type=int, default=512)
     parser.add_argument("--image-height", type=int, default=512)
     parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--leaf-size", type=int, default=8)
     parser.add_argument("--cleanup-seconds", type=float, default=30.0)
     parser.add_argument("--mid-interp", type=float, default=0.5)
     parser.add_argument("--margin", type=float, default=0.0)
@@ -201,31 +152,14 @@ def main() -> None:
     n = args.grid_width * args.grid_height
     points = make_meandering_points(n, seed=args.seed)
     target_points = build_target_grid(args.grid_width, args.grid_height, args.margin)
-    assignment = recursive_seed(
+    _, assignment, _ = megalap.snap_to_grid(
         points,
-        target_points,
-        args.grid_width,
-        args.grid_height,
-        leaf_size=args.leaf_size,
+        width=args.grid_width,
+        height=args.grid_height,
+        cleanup_seconds=args.cleanup_seconds,
+        margin=args.margin,
+        num_threads=None if args.num_threads == 0 else args.num_threads,
     )
-
-    if args.cleanup_seconds > 0.0:
-        cleanup = megalap.window_cleanup(
-            points,
-            assignment,
-            rows=args.grid_height,
-            cols=args.grid_width,
-            budget_seconds=args.cleanup_seconds,
-            window_size=6,
-            margin=args.margin,
-            num_threads=None if args.num_threads == 0 else args.num_threads,
-        )
-        assignment = np.asarray(cleanup["assignment"], dtype=np.int64)
-        print(
-            f"cleanup passes={cleanup['passes_completed']} "
-            f"elapsed_s={cleanup['elapsed_s']:.3f} "
-            f"final_cost={cleanup['final_cost']:.6f}"
-        )
 
     dest_points = target_points[assignment]
     rgb = render_triptych(

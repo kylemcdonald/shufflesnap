@@ -38,7 +38,7 @@ def summarize(label: str, rows: int, cols: int, num_threads: int | None) -> None
             num_threads=num_threads,
         )
         elapsed.append(float(result["elapsed_s"]))
-        passes.append(int(result["passes_completed"]))
+        passes.append(int(result["rounds_completed"]))
         final_cost.append(float(result["final_cost"]))
 
     rates = [p / e for p, e in zip(passes, elapsed)]

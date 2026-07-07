@@ -1,16 +1,32 @@
 # megalap
 
-`megalap` is a Python package with a native C++ core and `nanobind` bindings for point-to-grid assignment work.
+`megalap` assigns large 2D point clouds to regular grids: every point gets its own grid cell, and the total squared movement is nearly minimal. It is a Python package with a native C++ core and `nanobind` bindings.
 
-The public API is intentionally small:
+The main use case is turning embeddings (UMAP, t-SNE, Isomap) into image atlases: millions of points, one thumbnail per cell, no overlap.
 
-1. `linear_sum_assignment(cost_matrix)`
-2. `window_cleanup(points, initial_assignment, rows, cols, budget_seconds, ...)`
-3. `snap_to_grid(points, width=None, height=None, cleanup_seconds=None, ...)`
+The public API is three functions:
+
+1. `snap_to_grid(points, ...)` — the high-level entry point
+2. `window_cleanup(points, initial_assignment, rows, cols, ...)` — the multiscale solver behind it
+3. `linear_sum_assignment(cost_matrix)` — a native dense square Jonker-Volgenant solver
+
+## How it works
+
+`megalap` never builds the `n x n` cost matrix that makes exact dense assignment infeasible at scale (a million points would need 7.3 TiB). Instead it starts from a trivial legal assignment and repeatedly solves exact linear assignment problems inside small windows of the grid — at multiple scales.
+
+A window is at most `6x6` cells. At stride 1, windows cover contiguous cells and fix local defects. At stride `s`, the same windows cover every `s`-th cell, so one exact `36`-cell solve can move points all the way across the grid. One coarse-to-fine sweep (stride halving from grid-spanning down to 1, like the gap sequence in shell sort) repairs global structure in a handful of rounds; stride-1 rounds then polish until the budget expires or nothing changes.
+
+Properties:
+
+- **Anytime and monotone.** The assignment is legal after every round and the cost never increases.
+- **Seed-independent.** Even from a random permutation, a few rounds reach a fraction of a percent above the exact optimum.
+- **Linear memory.** No global cost matrix, ever.
+- **Parallel.** All windows in a phase are disjoint and solved on native C++ threads.
+- **Holes are free.** If `n < width * height`, unfilled cells drift to where they least distort the layout (window solves are rectangular). No padding or ghost points.
 
 ## Showcase
 
-`512x512` meandering point cloud, recursive `8x8` seed, `30s` of native `6x6` cleanup, rendered as a three-panel hero image on a black background:
+`512x512` meandering point cloud, rendered as a three-panel hero image on a black background:
 
 1. the initial point cloud
 2. a `50%` interpolated view
@@ -36,78 +52,50 @@ python -m pip install -e .
 
 ## API
 
-### `linear_sum_assignment(cost_matrix)`
+### `snap_to_grid(points, width=None, height=None, cleanup_seconds=None, window_size=6, margin=0.03, num_threads=None)`
 
-Solve a dense square LAP with the native C++ Jonker-Volgenant implementation.
+Assign a 2D point cloud to distinct cells of a regular grid.
 
-Inputs:
-
-- `cost_matrix`: `float64` array-like of shape `(n, n)`
+- `points`: `(n, 2)` float64 array-like
+- `width`, `height`: destination grid; omitted, a near-square grid with aspect ratio in `[1:1, 2:1]` is chosen (an exact factorization of `n` when one exists, otherwise a slightly larger grid — leftover cells simply stay empty)
+- `cleanup_seconds`: cleanup budget cap, default `10.0`; cleanup stops early once converged; `0.0` returns the raw seed
+- `num_threads`: `None` uses all hardware threads
 
 Returns:
 
-- `row_ind`: `int64` NumPy array of shape `(n,)`
-- `col_ind`: `int64` NumPy array of shape `(n,)`
-- `total_cost`: Python `float`
+- `grid_points`: `(n, 2)` float64 array of assigned grid positions, in input order
+- `assignment`: `(n,)` int64 array of destination cell ids (`row * width + col`)
+- `(width, height)`: the destination grid size
 
-### `window_cleanup(points, initial_assignment, rows, cols, budget_seconds, window_size=6, margin=0.03, num_threads=None, fixed_suffix_count=0)`
+### `window_cleanup(points, initial_assignment, rows, cols, budget_seconds=None, window_size=6, margin=0.03, num_threads=None, fixed_suffix_count=0, strides=None, trace_rounds=False)`
 
-Run the native overlapping-window cleanup kernel.
+Improve any legal assignment with multiscale window cleanup.
 
-Behavior:
+- `points` may number fewer than `rows * cols`; unassigned cells act as movable holes
+- `budget_seconds=None` runs until converged (a full stride-1 round changes nothing)
+- `strides=None` uses `default_stride_schedule(rows, cols, window_size)`: one round per stride, coarse to fine, then stride 1 repeats. Pass a custom list of strides (ints or `(row, col)` pairs) to override; the last entry repeats.
+- `fixed_suffix_count` keeps a suffix of target cells locked
+- `trace_rounds=True` adds per-round `round_elapsed_s`, `round_costs`, `round_strides` arrays to the result
 
-- uses the C++ backend
-- solves each phase as multiple independent small JV problems
-- runs same-phase window solves in parallel with native C++ threads
-- `num_threads=None` uses `std::thread::hardware_concurrency()`
-- `num_threads=1` forces serial cleanup
-- `fixed_suffix_count` can keep a suffix of target cells locked, which is useful for padded ghost points
+Returns a dict with `assignment`, `rounds_completed`, `elapsed_s`, `final_cost`, and `converged`.
 
-Inputs:
+### `linear_sum_assignment(cost_matrix)`
 
-- `points`: `float64` array-like of shape `(n, 2)`
-- `initial_assignment`: `int64` array-like of shape `(n,)`
-- `rows`, `cols`: target grid dimensions
-- `budget_seconds`: cleanup wall-clock budget
-- `window_size`: default `6`
-- `margin`: normalized grid margin
-- `num_threads`: optional thread count override
-- `fixed_suffix_count`: number of trailing target cells to keep fixed during cleanup
+Solve a dense square LAP exactly with the native C++ Jonker-Volgenant implementation. Useful for small problems and for auditing `window_cleanup` results.
 
-Returns a Python `dict` with:
-
-- `assignment`: final `int64` NumPy array
-- `passes_completed`
-- `elapsed_s`
-- `final_cost`
-
-### `snap_to_grid(points, width=None, height=None, cleanup_seconds=None, window_size=6, margin=0.03, num_threads=None, exact_point_limit=10000)`
-
-High-level point-cloud wrapper.
-
-Behavior:
-
-- chooses a destination grid automatically when `width` and `height` are omitted
-- prefers exact rectangular sizes with aspect ratio in `[1:1, 2:1]`
-- if no exact factorization exists in that range, chooses a near-square enclosing grid in that same band
-- pads with edge ghost points when the grid has more cells than real points
-- when the padded assignment problem has fewer than `10000` cells, runs the native auction LAP solver by default
-- when the padded assignment problem has `10000` cells or more, skips dense exact assignment and runs the native iterative cleanup solver for `10s` by default
-- pass `cleanup_seconds` to override the default iterative budget; `cleanup_seconds=0.0` disables cleanup
-- passes `num_threads` through to the native cleanup kernel
-- pass `exact_point_limit` to adjust the automatic exact/iterative threshold
-
-Returns three values:
-
-- `grid_points`: `(n, 2)` float64 NumPy array of assigned destination-grid positions, in the original source-point order
-- `assignment`: `(n,)` int64 NumPy array of destination-grid indices for the original source points
-- `(width, height)`: destination-grid size tuple
+Returns `(row_ind, col_ind, total_cost)`.
 
 ## Example
 
-See [examples/basic_usage.py](examples/basic_usage.py).
+```python
+import numpy as np
+import megalap
 
-Run it after installation:
+points = np.random.default_rng(0).random((100_000, 2))
+grid_points, assignment, (width, height) = megalap.snap_to_grid(points)
+```
+
+See [examples/basic_usage.py](examples/basic_usage.py) for a rendered example:
 
 ```bash
 python -m pip install -e '.[examples]'
@@ -126,34 +114,12 @@ python examples/render_showcase.py \
   --output assets/showcase_triptych_512.png
 ```
 
-That renderer uses NumPy directly and writes the PNG without matplotlib.
-
 For release instructions, see [PUBLISHING.md](PUBLISHING.md).
-
-## Cleanup Threading Benchmark
-
-There is a small reproducible threading benchmark at [examples/benchmark_threads.py](examples/benchmark_threads.py).
-
-Run it with:
-
-```bash
-python examples/benchmark_threads.py
-```
-
-On this machine (`16` logical CPUs), using a `256x256` meandering point cloud, identity seed assignment, `window_size=6`, and a `1.0s` cleanup budget, the median of `3` runs was:
-
-| mode | median elapsed | median passes | median passes/s |
-|---|---:|---:|---:|
-| `num_threads=1` | `1.028 s` | `3` | `2.92` |
-| `num_threads=None` | `1.026 s` | `31` | `30.20` |
-
-So the default threaded path improved cleanup throughput by about `10.3x` on that benchmark.
 
 ## Notes
 
-- `linear_sum_assignment()` currently expects a square cost matrix.
-- `snap_to_grid()` handles non-rectangular point counts by padding with visible ghost points along the trailing edge of the chosen destination grid.
-- `snap_to_grid()` uses the padded grid size, not just the number of input points, when deciding whether the default path should be exact or iterative.
-- The cleanup kernel uses overlapping windows of at most `6x6`, so the native small-JV kernel is specialized for up to `36` points per window.
+- `linear_sum_assignment()` expects a square cost matrix.
+- The cleanup kernel uses windows of at most `6x6`, so the native small-LAP kernel is specialized for up to `36` cells per window; window solves are rectangular when holes are present.
 - The native cleanup kernel uses standard C++ threads and does not depend on OpenMP.
+- With `budget_seconds=None` (run to convergence), assignments are deterministic for fixed inputs and parameters, independent of thread count. With a finite budget, the number of completed rounds can vary with machine load.
 - GitHub Actions builds release artifacts for Linux, macOS, and Windows wheels, plus an sdist.
