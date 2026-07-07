@@ -94,13 +94,13 @@ def default_stride_schedule(rows: int, cols: int, window_size: int = 6) -> list[
 def _resolve_stride_schedule(strides, rows: int, cols: int, window_size: int) -> list[int]:
     if strides is None:
         schedule = default_stride_schedule(rows, cols, window_size)
-    elif isinstance(strides, int):
-        schedule = [(strides, strides)]
+    elif isinstance(strides, (int, np.integer)):
+        schedule = [(int(strides), int(strides))]
     else:
         schedule = []
         for entry in strides:
-            if isinstance(entry, int):
-                schedule.append((entry, entry))
+            if isinstance(entry, (int, np.integer)):
+                schedule.append((int(entry), int(entry)))
             else:
                 stride_r, stride_c = entry
                 schedule.append((int(stride_r), int(stride_c)))
@@ -177,6 +177,12 @@ def window_cleanup(
     if int(rows) * int(cols) < pts.shape[0]:
         raise ValueError("rows * cols must be at least the number of points")
     budget = math.inf if budget_seconds is None else float(budget_seconds)
+    schedule = _resolve_stride_schedule(strides, int(rows), int(cols), int(window_size))
+    if math.isinf(budget) and tuple(schedule[-2:]) != (1, 1):
+        raise ValueError(
+            "budget_seconds=None runs until a stride-(1, 1) round converges, "
+            "so the stride schedule must end with 1 (or pass a finite budget)"
+        )
     result = _window_cleanup(
         pts,
         assignment,
@@ -187,7 +193,7 @@ def window_cleanup(
         float(margin),
         int(fixed_suffix_count),
         _normalize_num_threads(num_threads),
-        _resolve_stride_schedule(strides, int(rows), int(cols), int(window_size)),
+        schedule,
         bool(trace_rounds),
     )
     result["assignment"] = np.asarray(result["assignment"], dtype=np.int64)
@@ -195,6 +201,7 @@ def window_cleanup(
         result["round_elapsed_s"] = np.asarray(result["round_elapsed_s"], dtype=np.float64)
         result["round_costs"] = np.asarray(result["round_costs"], dtype=np.float64)
         result["round_strides"] = np.asarray(result["round_strides"], dtype=np.int64)
+        result["round_strides_col"] = np.asarray(result["round_strides_col"], dtype=np.int64)
     return result
 
 
@@ -217,6 +224,8 @@ def snap_to_grid(
     pts = np.asarray(points, dtype=np.float64, order="C")
     if pts.ndim != 2 or pts.shape[1] != 2:
         raise ValueError("points must have shape (n, 2)")
+    if pts.shape[0] == 0:
+        raise ValueError("points must be non-empty")
 
     n = int(pts.shape[0])
     if width is None and height is None:

@@ -45,7 +45,8 @@ struct CleanupResult {
     bool converged = false;
     std::vector<double> round_elapsed_s;
     std::vector<double> round_costs;
-    std::vector<std::int64_t> round_strides;
+    std::vector<std::int64_t> round_strides_row;
+    std::vector<std::int64_t> round_strides_col;
 };
 
 struct WindowSolveResult {
@@ -386,7 +387,13 @@ CleanupResult run_cleanup(
     const std::vector<std::int64_t>& stride_schedule,
     bool trace_rounds
 ) {
+    if (rows <= 0 || cols <= 0) {
+        throw std::runtime_error("rows and cols must be positive");
+    }
     const std::size_t n_cells = static_cast<std::size_t>(rows) * static_cast<std::size_t>(cols);
+    if (n_cells > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
+        throw std::runtime_error("rows * cols must fit in a 32-bit signed integer");
+    }
     if (n_points > n_cells) {
         throw std::runtime_error("number of points must not exceed rows * cols");
     }
@@ -493,9 +500,11 @@ CleanupResult run_cleanup(
 
                         int point_count = 0;
                         std::array<int, kMaxWindowCells> window_points{};
+                        std::array<int, kMaxWindowCells> incumbent_cols{};
                         for (int i = 0; i < cell_count; ++i) {
                             const int point_id = owner[static_cast<std::size_t>(active_targets[i])];
                             if (point_id >= 0) {
+                                incumbent_cols[point_count] = i;
                                 window_points[point_count++] = point_id;
                             }
                         }
@@ -525,6 +534,24 @@ CleanupResult run_cleanup(
                         if (!solve_rect_jv_small(point_count, cell_count, cost.data(), col4row.data())) {
                             phase_failed.store(1, std::memory_order_relaxed);
                             return;
+                        }
+
+                        // Apply only solutions that improve the window cost by
+                        // more than the summation rounding error (a 36-term sum
+                        // is exact to ~1e-14 relative). This keeps the true
+                        // global cost strictly decreasing across applied windows,
+                        // which guarantees termination and prevents endless
+                        // flips between tied optima (e.g. duplicate points).
+                        double incumbent_cost = 0.0;
+                        double new_cost = 0.0;
+                        for (int i = 0; i < point_count; ++i) {
+                            const int row_offset = i * cell_count;
+                            incumbent_cost += cost[static_cast<std::size_t>(row_offset + incumbent_cols[i])];
+                            new_cost += cost[static_cast<std::size_t>(row_offset + col4row[i])];
+                        }
+                        if (incumbent_cost - new_cost <= 1e-12 * incumbent_cost) {
+                            results[window_idx] = local;
+                            continue;
                         }
 
                         local.solved = true;
@@ -602,7 +629,8 @@ CleanupResult run_cleanup(
         if (trace_rounds) {
             result.round_elapsed_s.push_back(elapsed_s);
             result.round_costs.push_back(assignment_total_cost());
-            result.round_strides.push_back(static_cast<std::int64_t>(stride_r));
+            result.round_strides_row.push_back(static_cast<std::int64_t>(stride_r));
+            result.round_strides_col.push_back(static_cast<std::int64_t>(stride_c));
         }
 
         if (finest && schedule_done && round_changes == 0) {
@@ -699,7 +727,8 @@ NB_MODULE(_core, m) {
             if (trace_rounds) {
                 out["round_elapsed_s"] = nb::cast(result.round_elapsed_s);
                 out["round_costs"] = nb::cast(result.round_costs);
-                out["round_strides"] = nb::cast(result.round_strides);
+                out["round_strides"] = nb::cast(result.round_strides_row);
+                out["round_strides_col"] = nb::cast(result.round_strides_col);
             }
             return out;
         },

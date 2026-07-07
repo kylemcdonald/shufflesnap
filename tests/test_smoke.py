@@ -207,6 +207,57 @@ def test_window_cleanup_zero_budget_runs_one_round() -> None:
     assert result["elapsed_s"] >= 0.0
 
 
+def test_window_cleanup_converges_with_duplicate_points() -> None:
+    # Tied window optima must not flip forever: duplicate points make ties
+    # ubiquitous, and budget_seconds=None must still terminate.
+    rng = np.random.default_rng(7)
+    base = rng.integers(0, 2, size=(24, 2)).astype(np.float64) * 0.9 + 0.05
+    initial = rng.permutation(36)[:24].astype(np.int64)
+
+    result = megalap.window_cleanup(base, initial, rows=6, cols=6)
+
+    assert result["converged"]
+    assert len(set(result["assignment"].tolist())) == 24
+
+
+def test_window_cleanup_infinite_budget_requires_stride_one_schedule() -> None:
+    points = np.random.default_rng(8).random((16, 2))
+    initial = np.arange(16, dtype=np.int64)
+
+    with pytest.raises(ValueError):
+        megalap.window_cleanup(points, initial, rows=4, cols=4, strides=2)
+
+    result = megalap.window_cleanup(points, initial, rows=4, cols=4,
+                                    strides=2, budget_seconds=0.05)
+    assert sorted(result["assignment"].tolist()) == list(range(16))
+
+
+def test_window_cleanup_accepts_numpy_integer_strides() -> None:
+    points = np.random.default_rng(9).random((16, 2))
+    initial = np.arange(16, dtype=np.int64)
+
+    result = megalap.window_cleanup(
+        points, initial, rows=4, cols=4, strides=np.array([2, 1]),
+    )
+    assert result["converged"]
+
+
+def test_window_cleanup_trace_costs_never_increase_with_ties() -> None:
+    rng = np.random.default_rng(10)
+    base = np.repeat(rng.random((18, 2)), 2, axis=0)  # every point duplicated
+    initial = rng.permutation(36).astype(np.int64)
+
+    result = megalap.window_cleanup(base, initial, rows=6, cols=6, trace_rounds=True)
+
+    assert result["converged"]
+    assert np.all(np.diff(result["round_costs"]) <= 0.0)
+
+
+def test_snap_to_grid_rejects_empty_points() -> None:
+    with pytest.raises(ValueError):
+        megalap.snap_to_grid(np.empty((0, 2)), width=4, height=4)
+
+
 def test_default_stride_schedule_shapes() -> None:
     schedule = megalap.default_stride_schedule(96, 96)
     assert schedule[0] == (16, 16)
