@@ -258,6 +258,42 @@ def test_snap_to_grid_rejects_empty_points() -> None:
         megalap.snap_to_grid(np.empty((0, 2)), width=4, height=4)
 
 
+def test_snap_to_grid_with_circle_mask() -> None:
+    rng = np.random.default_rng(11)
+    side = 20
+    yy, xx = np.mgrid[0:side, 0:side]
+    mask = (xx - (side - 1) / 2) ** 2 + (yy - (side - 1) / 2) ** 2 <= (side / 2) ** 2
+    n = int(mask.sum()) - 10
+    points = 0.03 + 0.94 * rng.random((n, 2))
+
+    grid_points, assignment, (width, height) = megalap.snap_to_grid(points, mask=mask)
+
+    assert (width, height) == (side, side)
+    assert len(set(assignment.tolist())) == n
+    assert mask.reshape(-1)[assignment].all()  # every point inside the mask
+
+
+def test_window_cleanup_rejects_assignment_outside_mask() -> None:
+    points = np.random.default_rng(12).random((4, 2))
+    initial = np.arange(4, dtype=np.int64)
+    mask = np.ones(16, dtype=bool)
+    mask[0] = False  # cell 0 is masked out but point 0 sits there
+
+    with pytest.raises(RuntimeError):
+        megalap.window_cleanup(points, initial, rows=4, cols=4,
+                               budget_seconds=0.0, cell_mask=mask)
+
+
+def test_snap_to_grid_defaults_to_convergence() -> None:
+    rng = np.random.default_rng(13)
+    points = 0.03 + 0.94 * rng.random((15 * 15, 2))
+
+    _, first, _ = megalap.snap_to_grid(points, width=15, height=15)
+    _, second, _ = megalap.snap_to_grid(points, width=15, height=15)
+
+    assert first.tolist() == second.tolist()  # converged runs are deterministic
+
+
 def test_default_stride_schedule_shapes() -> None:
     schedule = megalap.default_stride_schedule(96, 96)
     assert schedule[0] == (16, 16)

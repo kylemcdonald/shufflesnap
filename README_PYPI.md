@@ -33,7 +33,8 @@ Behavior:
 
 - chooses a destination grid automatically when `width` and `height` are omitted: an exact factorization of `n` with aspect ratio in `[1:1, 2:1]` when one exists, otherwise a slightly larger near-square grid
 - supports any `n <= width * height` directly: leftover cells stay empty and drift toward the sparsest parts of the cloud during cleanup (no padding, no ghost points)
-- `cleanup_seconds` caps the cleanup budget (default `10.0`); cleanup stops early once converged; `0.0` returns the raw seed
+- by default cleanup runs until it converges (no window can improve the assignment); `cleanup_seconds` caps the time instead, and `0.0` returns the raw seed
+- pass `mask` (a `(height, width)` bool array) to restrict which cells may be used — shaped atlases (circles, cut corners, a half-empty last row) work out of the box
 
 Returns:
 
@@ -51,7 +52,7 @@ Key options:
 - `strides=None` uses the automatic coarse-to-fine schedule; pass a list to override
 - `window_size=6`
 - `num_threads=None` to use `std::thread::hardware_concurrency()`
-- `fixed_suffix_count` to keep a suffix of target cells fixed
+- `fixed_suffix_count` to keep a suffix of target cells fixed; `cell_mask` to mark which cells may be used at all
 - `trace_rounds=True` to record per-round cost, elapsed time, and stride
 
 Returns a dict with `assignment`, `rounds_completed`, `elapsed_s`, `final_cost`, and `converged`.

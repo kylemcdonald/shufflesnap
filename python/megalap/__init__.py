@@ -6,10 +6,7 @@ import numpy as np
 
 from ._core import _linear_sum_assignment, _window_cleanup
 
-DEFAULT_CLEANUP_SECONDS = 10.0
-
 __all__ = [
-    "DEFAULT_CLEANUP_SECONDS",
     "default_stride_schedule",
     "linear_sum_assignment",
     "window_cleanup",
@@ -135,15 +132,31 @@ def linear_sum_assignment(cost_matrix):
     )
 
 
-def _spread_seed_assignment(points: np.ndarray, total_cells: int) -> np.ndarray:
+def _spread_seed_assignment(points: np.ndarray, usable_cells: np.ndarray) -> np.ndarray:
     """Cheap legal seed: points sorted by (y, x) are placed on evenly spread
-    cells in row-major order. Exactly the identity raster when n == cells."""
+    usable cells in row-major order. Exactly the identity raster when the
+    usable cells are all cells and n == cells."""
     n = int(points.shape[0])
+    total = int(usable_cells.shape[0])
     order = np.lexsort((points[:, 0], points[:, 1]))
-    cells = np.floor(np.arange(n, dtype=np.float64) * (total_cells / n)).astype(np.int64)
+    picks = np.floor(np.arange(n, dtype=np.float64) * (total / n)).astype(np.int64)
     assignment = np.empty(n, dtype=np.int64)
-    assignment[order] = cells
+    assignment[order] = usable_cells[picks]
     return assignment
+
+
+def _resolve_cell_mask(cell_mask, rows: int, cols: int) -> list[int]:
+    """Normalize a usable-cell mask to the kernel's blocked-cell id list."""
+    if cell_mask is None:
+        return []
+    mask = np.asarray(cell_mask, dtype=bool)
+    if mask.ndim == 2:
+        if mask.shape != (rows, cols):
+            raise ValueError("cell_mask must have shape (rows, cols)")
+        mask = mask.reshape(-1)
+    elif mask.ndim != 1 or mask.shape[0] != rows * cols:
+        raise ValueError("cell_mask must have shape (rows, cols) or (rows * cols,)")
+    return np.flatnonzero(~mask).tolist()
 
 
 def window_cleanup(
@@ -158,6 +171,7 @@ def window_cleanup(
     fixed_suffix_count: int = 0,
     strides=None,
     trace_rounds: bool = False,
+    cell_mask=None,
 ):
     """Improve a legal assignment with multiscale window cleanup.
 
@@ -166,7 +180,8 @@ def window_cleanup(
     stride-(1, 1) round changes nothing (``converged``). ``budget_seconds=None``
     runs until convergence. Points may number fewer than ``rows * cols``; the
     unassigned cells act as holes that drift to wherever they least hurt the
-    objective.
+    objective. ``cell_mask`` (bool, ``(rows, cols)`` or flat) marks which cells
+    may be used; masked-out cells are never assigned.
     """
     pts = np.asarray(points, dtype=np.float64, order="C")
     assignment = np.asarray(initial_assignment, dtype=np.int64, order="C")
@@ -195,6 +210,7 @@ def window_cleanup(
         _normalize_num_threads(num_threads),
         schedule,
         bool(trace_rounds),
+        _resolve_cell_mask(cell_mask, int(rows), int(cols)),
     )
     result["assignment"] = np.asarray(result["assignment"], dtype=np.int64)
     if trace_rounds:
@@ -213,13 +229,18 @@ def snap_to_grid(
     window_size: int = 6,
     margin: float = 0.03,
     num_threads: int | None = None,
+    mask=None,
 ):
     """Assign a 2D point cloud to distinct cells of a regular grid.
 
     Any ``n <= width * height`` is supported directly: leftover cells stay
     empty and drift toward the sparsest parts of the cloud during cleanup.
-    ``cleanup_seconds`` caps the cleanup budget (default
-    ``DEFAULT_CLEANUP_SECONDS``); cleanup stops early once converged.
+    Pass ``mask`` (bool array, shape ``(height, width)``) to restrict which
+    cells may be used, e.g. to shape the atlas or to place the empty cells by
+    hand; the grid shape is taken from the mask when ``width``/``height`` are
+    omitted. By default cleanup runs until it converges (no window can improve
+    the assignment); pass ``cleanup_seconds`` to cap the time instead, or
+    ``0.0`` to return the raw seed.
     """
     pts = np.asarray(points, dtype=np.float64, order="C")
     if pts.ndim != 2 or pts.shape[1] != 2:
@@ -228,7 +249,18 @@ def snap_to_grid(
         raise ValueError("points must be non-empty")
 
     n = int(pts.shape[0])
-    if width is None and height is None:
+    if mask is not None:
+        mask = np.asarray(mask, dtype=bool)
+        if mask.ndim != 2:
+            raise ValueError("mask must be a 2D boolean array of shape (height, width)")
+        if width is None and height is None:
+            height, width = mask.shape
+        else:
+            if (int(height), int(width)) != mask.shape:
+                raise ValueError("mask shape must match (height, width)")
+        width = int(width)
+        height = int(height)
+    elif width is None and height is None:
         width, height = _choose_grid_shape(n)
     elif width is None or height is None:
         raise ValueError("width and height must be provided together")
@@ -239,14 +271,17 @@ def snap_to_grid(
     if width <= 0 or height <= 0:
         raise ValueError("width and height must be positive")
 
-    total_cells = width * height
-    if total_cells < n:
-        raise ValueError("width * height must be at least the number of source points")
+    if mask is not None:
+        usable_cells = np.flatnonzero(mask.reshape(-1))
+    else:
+        usable_cells = np.arange(width * height, dtype=np.int64)
+    if usable_cells.shape[0] < n:
+        raise ValueError("the grid (after masking) must have at least as many cells as points")
 
-    assignment = _spread_seed_assignment(pts, total_cells)
-    budget = DEFAULT_CLEANUP_SECONDS if cleanup_seconds is None else float(cleanup_seconds)
+    assignment = _spread_seed_assignment(pts, usable_cells)
+    budget = None if cleanup_seconds is None else float(cleanup_seconds)
 
-    if budget > 0.0:
+    if budget is None or budget > 0.0:
         cleanup = window_cleanup(
             pts,
             assignment,
@@ -256,6 +291,7 @@ def snap_to_grid(
             window_size=window_size,
             margin=margin,
             num_threads=num_threads,
+            cell_mask=mask,
         )
         assignment = cleanup["assignment"]
 

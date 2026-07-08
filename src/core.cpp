@@ -385,7 +385,8 @@ CleanupResult run_cleanup(
     int fixed_suffix_count,
     int num_threads,
     const std::vector<std::int64_t>& stride_schedule,
-    bool trace_rounds
+    bool trace_rounds,
+    const std::vector<std::int64_t>& blocked_cells
 ) {
     if (rows <= 0 || cols <= 0) {
         throw std::runtime_error("rows and cols must be positive");
@@ -422,12 +423,29 @@ CleanupResult run_cleanup(
         ay[i] = points[(2 * i) + 1];
     }
 
+    std::vector<unsigned char> usable;
+    if (!blocked_cells.empty()) {
+        usable.assign(n_cells, 1);
+        for (const auto blocked : blocked_cells) {
+            if (blocked < 0 || blocked >= static_cast<std::int64_t>(n_cells)) {
+                throw std::runtime_error("cell mask contains out-of-range cell ids");
+            }
+            usable[static_cast<std::size_t>(blocked)] = 0;
+        }
+        if (n_points > n_cells - blocked_cells.size()) {
+            throw std::runtime_error("cell mask leaves fewer usable cells than points");
+        }
+    }
+
     std::vector<int> assignment(n_points, -1);
     std::vector<int> owner(n_cells, -1);
     for (std::size_t point_id = 0; point_id < n_points; ++point_id) {
         const auto target_id = static_cast<std::int64_t>(initial_assignment[point_id]);
         if (target_id < 0 || target_id >= static_cast<std::int64_t>(n_cells)) {
             throw std::runtime_error("initial_assignment contains out-of-range target ids");
+        }
+        if (!usable.empty() && usable[static_cast<std::size_t>(target_id)] == 0) {
+            throw std::runtime_error("initial_assignment assigns a point to a masked-out cell");
         }
         if (owner[static_cast<std::size_t>(target_id)] != -1) {
             throw std::runtime_error("initial_assignment assigns two points to the same target");
@@ -489,9 +507,13 @@ CleanupResult run_cleanup(
                         int cell_count = 0;
                         for (int i = 0; i < window.len; ++i) {
                             const int target_id = window.target_ids[i];
-                            if (target_id < fixed_start) {
-                                active_targets[cell_count++] = target_id;
+                            if (target_id >= fixed_start) {
+                                continue;
                             }
+                            if (!usable.empty() && usable[static_cast<std::size_t>(target_id)] == 0) {
+                                continue;
+                            }
+                            active_targets[cell_count++] = target_id;
                         }
                         if (cell_count <= 1) {
                             results[window_idx] = local;
@@ -687,7 +709,8 @@ NB_MODULE(_core, m) {
            int fixed_suffix_count,
            int num_threads,
            std::vector<std::int64_t> stride_schedule,
-           bool trace_rounds) {
+           bool trace_rounds,
+           std::vector<std::int64_t> blocked_cells) {
             if (points.ndim() != 2 || points.shape(1) != 2) {
                 throw std::runtime_error("points must have shape (n, 2)");
             }
@@ -715,7 +738,8 @@ NB_MODULE(_core, m) {
                     fixed_suffix_count,
                     num_threads,
                     stride_schedule,
-                    trace_rounds
+                    trace_rounds,
+                    blocked_cells
                 );
             }
             nb::dict out;
@@ -743,6 +767,7 @@ NB_MODULE(_core, m) {
         "num_threads"_a = 0,
         "stride_schedule"_a,
         "trace_rounds"_a = false,
+        "blocked_cells"_a = std::vector<std::int64_t>{},
         "Run native multiscale window cleanup from an initial assignment."
     );
 }

@@ -52,13 +52,14 @@ python -m pip install -e .
 
 ## API
 
-### `snap_to_grid(points, width=None, height=None, cleanup_seconds=None, window_size=6, margin=0.03, num_threads=None)`
+### `snap_to_grid(points, width=None, height=None, cleanup_seconds=None, window_size=6, margin=0.03, num_threads=None, mask=None)`
 
 Assign a 2D point cloud to distinct cells of a regular grid.
 
 - `points`: `(n, 2)` float64 array-like
 - `width`, `height`: destination grid; omitted, a near-square grid with aspect ratio in `[1:1, 2:1]` is chosen (an exact factorization of `n` when one exists, otherwise a slightly larger grid — leftover cells simply stay empty)
-- `cleanup_seconds`: cleanup budget cap, default `10.0`; cleanup stops early once converged; `0.0` returns the raw seed
+- `cleanup_seconds`: optional wall-clock cap; by default cleanup runs until it converges (no window can improve the assignment); `0.0` returns the raw seed
+- `mask`: optional `(height, width)` bool array restricting which cells may be used, e.g. to shape the atlas or place the empty cells by hand
 - `num_threads`: `None` uses all hardware threads
 
 Returns:
@@ -67,14 +68,14 @@ Returns:
 - `assignment`: `(n,)` int64 array of destination cell ids (`row * width + col`)
 - `(width, height)`: the destination grid size
 
-### `window_cleanup(points, initial_assignment, rows, cols, budget_seconds=None, window_size=6, margin=0.03, num_threads=None, fixed_suffix_count=0, strides=None, trace_rounds=False)`
+### `window_cleanup(points, initial_assignment, rows, cols, budget_seconds=None, window_size=6, margin=0.03, num_threads=None, fixed_suffix_count=0, strides=None, trace_rounds=False, cell_mask=None)`
 
 Improve any legal assignment with multiscale window cleanup.
 
 - `points` may number fewer than `rows * cols`; unassigned cells act as movable holes
 - `budget_seconds=None` runs until converged (a full stride-1 round changes nothing)
 - `strides=None` uses `default_stride_schedule(rows, cols, window_size)`: one round per stride, coarse to fine, then stride 1 repeats. Pass a custom list of strides (ints or `(row, col)` pairs) to override; the last entry repeats.
-- `fixed_suffix_count` keeps a suffix of target cells locked
+- `fixed_suffix_count` keeps a suffix of target cells locked; `cell_mask` marks which cells may be used at all
 - `trace_rounds=True` adds per-round `round_elapsed_s`, `round_costs`, `round_strides` arrays to the result
 
 Returns a dict with `assignment`, `rounds_completed`, `elapsed_s`, `final_cost`, and `converged`.
