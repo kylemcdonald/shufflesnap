@@ -694,7 +694,16 @@ NB_MODULE(_core, m) {
                 );
             }
             nb::dict out;
-            out["assignment"] = nb::cast(result.assignment);
+            // Hand the assignment to numpy zero-copy: nb::cast on a vector
+            // would build a Python list of n int objects (~40 GiB at n = 1e9).
+            auto* holder = new std::vector<std::int64_t>(std::move(result.assignment));
+            nb::capsule assignment_owner(holder, [](void* p) noexcept {
+                delete static_cast<std::vector<std::int64_t>*>(p);
+            });
+            const std::size_t assignment_shape[1] = {holder->size()};
+            out["assignment"] = nb::ndarray<nb::numpy, std::int64_t, nb::ndim<1>>(
+                holder->data(), 1, assignment_shape, assignment_owner
+            );
             out["rounds_completed"] = nb::int_(result.rounds_completed);
             out["elapsed_s"] = nb::float_(result.elapsed_s);
             out["final_cost"] = nb::float_(result.final_cost);
