@@ -26,11 +26,6 @@ namespace {
 constexpr int kMaxWindowCells = 36;
 constexpr double kInfinity = std::numeric_limits<double>::infinity();
 
-struct WindowTargets {
-    int len = 0;
-    std::array<int, kMaxWindowCells> target_ids{};
-};
-
 struct AssignmentResult {
     std::vector<std::int64_t> row_ind;
     std::vector<std::int64_t> col_ind;
@@ -49,11 +44,14 @@ struct CleanupResult {
     std::vector<std::int64_t> round_strides_col;
 };
 
-struct WindowSolveResult {
-    int len = 0;
-    bool solved = false;
-    std::array<int, kMaxWindowCells> point_ids{};
-    std::array<int, kMaxWindowCells> assigned_target_ids{};
+// One window-sized slice of one coset along a single axis: the coset offset
+// (grid units) plus the [start, end) band within the coset's subgrid
+// (subgrid units). A phase's windows are the cross product of its row bands
+// and column bands, so windows never need to be materialized.
+struct AxisBand {
+    int offset = 0;
+    int start = 0;
+    int end = 0;
 };
 
 double squared_distance(double ax, double ay, double bx, double by) {
@@ -279,98 +277,42 @@ bool solve_rect_jv_small(int n_rows, int n_cols, const double* cost, int* col4ro
     return true;
 }
 
-void build_target_grid(
-    int rows,
-    int cols,
-    double margin,
-    std::vector<double>& target_x,
-    std::vector<double>& target_y
-) {
-    const std::size_t n = static_cast<std::size_t>(rows) * static_cast<std::size_t>(cols);
-    target_x.assign(n, 0.0);
-    target_y.assign(n, 0.0);
-
-    std::vector<double> xs(cols, 0.5);
-    std::vector<double> ys(rows, 0.5);
-    if (cols > 1) {
-        const double step = (1.0 - (2.0 * margin)) / static_cast<double>(cols - 1);
-        for (int col = 0; col < cols; ++col) {
-            xs[col] = margin + (step * static_cast<double>(col));
+std::vector<double> build_axis_coords(int extent, double margin) {
+    std::vector<double> coords(static_cast<std::size_t>(extent), 0.5);
+    if (extent > 1) {
+        const double step = (1.0 - (2.0 * margin)) / static_cast<double>(extent - 1);
+        for (int i = 0; i < extent; ++i) {
+            coords[static_cast<std::size_t>(i)] = margin + (step * static_cast<double>(i));
         }
     }
-    if (rows > 1) {
-        const double step = (1.0 - (2.0 * margin)) / static_cast<double>(rows - 1);
-        for (int row = 0; row < rows; ++row) {
-            ys[row] = margin + (step * static_cast<double>(row));
-        }
-    }
-
-    for (int row = 0; row < rows; ++row) {
-        const int row_offset = row * cols;
-        for (int col = 0; col < cols; ++col) {
-            const int target_id = row_offset + col;
-            target_x[target_id] = xs[col];
-            target_y[target_id] = ys[row];
-        }
-    }
+    return coords;
 }
 
-// Windows for one phase at one (row, col) stride. The grid cells split into
-// stride_r * stride_c interleaved cosets; coset (a, b) holds the cells
-// (a + i * stride_r, b + j * stride_c) and forms a subgrid that is tiled with
-// window_rows x window_cols windows offset by (row_phase, col_phase). All
-// returned windows are pairwise disjoint, so they can be solved in parallel.
-std::vector<WindowTargets> build_phase_windows(
-    int rows,
-    int cols,
-    int window_rows,
-    int window_cols,
-    int row_phase,
-    int col_phase,
-    int stride_r,
-    int stride_c
-) {
-    std::vector<WindowTargets> windows;
-    for (int a = 0; a < stride_r; ++a) {
-        const int sub_rows = (rows - a + stride_r - 1) / stride_r;
-        if (sub_rows <= 0) {
+// Bands for one phase along one axis. The cells along the axis split into
+// `stride` interleaved cosets; coset `offset` holds the cells
+// (offset + i * stride) and is tiled with `window`-long bands starting at
+// `phase` (clamped into the subgrid). A phase's windows are the cross product
+// of its row bands and column bands, which makes them cheap to enumerate by
+// index and pairwise disjoint, so they can be solved and applied in parallel
+// without ever being materialized.
+std::vector<AxisBand> build_axis_bands(int extent, int window, int phase, int stride) {
+    std::vector<AxisBand> bands;
+    for (int offset = 0; offset < stride; ++offset) {
+        const int sub = (extent - offset + stride - 1) / stride;
+        if (sub <= 0) {
             continue;
         }
-        for (int b = 0; b < stride_c; ++b) {
-            const int sub_cols = (cols - b + stride_c - 1) / stride_c;
-            if (sub_cols <= 0) {
-                continue;
+        int start = std::min(phase, sub - 1);
+        while (true) {
+            const int end = std::min(start + window, sub);
+            bands.push_back(AxisBand{offset, start, end});
+            if (end == sub) {
+                break;
             }
-            int row_start = std::min(row_phase, sub_rows - 1);
-            while (true) {
-                const int row_end = std::min(row_start + window_rows, sub_rows);
-                int col_start = std::min(col_phase, sub_cols - 1);
-                while (true) {
-                    const int col_end = std::min(col_start + window_cols, sub_cols);
-                    WindowTargets window;
-                    for (int row = row_start; row < row_end; ++row) {
-                        const int grid_row = a + (row * stride_r);
-                        const int row_offset = grid_row * cols;
-                        for (int col = col_start; col < col_end; ++col) {
-                            window.target_ids[window.len++] = row_offset + b + (col * stride_c);
-                        }
-                    }
-                    if (window.len > 1) {
-                        windows.push_back(window);
-                    }
-                    if (col_end == sub_cols) {
-                        break;
-                    }
-                    col_start += window_cols;
-                }
-                if (row_end == sub_rows) {
-                    break;
-                }
-                row_start += window_rows;
-            }
+            start += window;
         }
     }
-    return windows;
+    return bands;
 }
 
 CleanupResult run_cleanup(
@@ -416,13 +358,6 @@ CleanupResult run_cleanup(
         }
     }
 
-    std::vector<double> ax(n_points, 0.0);
-    std::vector<double> ay(n_points, 0.0);
-    for (std::size_t i = 0; i < n_points; ++i) {
-        ax[i] = points[(2 * i) + 0];
-        ay[i] = points[(2 * i) + 1];
-    }
-
     std::vector<unsigned char> usable;
     if (!blocked_cells.empty()) {
         usable.assign(n_cells, 1);
@@ -454,9 +389,10 @@ CleanupResult run_cleanup(
         owner[static_cast<std::size_t>(target_id)] = static_cast<int>(point_id);
     }
 
-    std::vector<double> target_x;
-    std::vector<double> target_y;
-    build_target_grid(rows, cols, margin, target_x, target_y);
+    // Target coordinates are a regular grid: two per-axis vectors replace the
+    // dense rows * cols coordinate arrays, which matters at 1e9 cells.
+    const std::vector<double> xs = build_axis_coords(cols, margin);
+    const std::vector<double> ys = build_axis_coords(rows, margin);
     const int fixed_start = static_cast<int>(n_cells) - fixed_suffix_count;
 
     const int half = std::max(1, window_size / 2);
@@ -467,7 +403,12 @@ CleanupResult run_cleanup(
         double total = 0.0;
         for (std::size_t point_id = 0; point_id < n_points; ++point_id) {
             const auto target_id = static_cast<std::size_t>(assignment[point_id]);
-            total += squared_distance(ax[point_id], ay[point_id], target_x[target_id], target_y[target_id]);
+            total += squared_distance(
+                points[2 * point_id],
+                points[(2 * point_id) + 1],
+                xs[target_id % static_cast<std::size_t>(cols)],
+                ys[target_id / static_cast<std::size_t>(cols)]
+            );
         }
         return total;
     };
@@ -481,42 +422,64 @@ CleanupResult run_cleanup(
         const std::size_t schedule_index = std::min(static_cast<std::size_t>(rounds), schedule_len - 1);
         const int stride_r = static_cast<int>(stride_schedule[2 * schedule_index]);
         const int stride_c = static_cast<int>(stride_schedule[(2 * schedule_index) + 1]);
-        std::int64_t round_changes = 0;
+        std::atomic<std::int64_t> round_changes{0};
 
         for (const auto& offsets : phase_offsets) {
-            const std::vector<WindowTargets> phase = build_phase_windows(
-                rows, cols, window_size, window_size, offsets[0], offsets[1], stride_r, stride_c
-            );
-            if (phase.empty()) {
+            const std::vector<AxisBand> row_bands =
+                build_axis_bands(rows, window_size, offsets[0], stride_r);
+            const std::vector<AxisBand> col_bands =
+                build_axis_bands(cols, window_size, offsets[1], stride_c);
+            const std::size_t window_count = row_bands.size() * col_bands.size();
+            if (window_count == 0) {
                 continue;
             }
-            std::vector<WindowSolveResult> results(phase.size());
             std::atomic<int> phase_failed{0};
             std::mutex worker_exception_mutex;
             std::exception_ptr worker_exception;
-            const int thread_count = resolve_thread_count(num_threads, phase.size());
+            const int thread_count = resolve_thread_count(num_threads, window_count);
+            // Windows are pairwise disjoint in targets, and every point sits in
+            // at most one window (via its current target), so workers can apply
+            // their solutions in place: no other thread reads or writes the same
+            // assignment/owner entries, and the final state is independent of
+            // application order.
             auto solve_window_range = [&](std::size_t begin, std::size_t end) {
                 try {
+                    std::int64_t local_changes = 0;
                     for (std::size_t window_idx = begin; window_idx < end; ++window_idx) {
                         if (phase_failed.load(std::memory_order_relaxed) != 0) {
                             return;
                         }
-                        const auto& window = phase[window_idx];
-                        WindowSolveResult local;
-                        std::array<int, kMaxWindowCells> active_targets{};
+                        const AxisBand& row_band = row_bands[window_idx / col_bands.size()];
+                        const AxisBand& col_band = col_bands[window_idx % col_bands.size()];
+                        const int area =
+                            (row_band.end - row_band.start) * (col_band.end - col_band.start);
+                        if (area <= 1) {
+                            continue;
+                        }
+
                         int cell_count = 0;
-                        for (int i = 0; i < window.len; ++i) {
-                            const int target_id = window.target_ids[i];
-                            if (target_id >= fixed_start) {
-                                continue;
+                        std::array<int, kMaxWindowCells> active_targets{};
+                        std::array<double, kMaxWindowCells> window_tx{};
+                        std::array<double, kMaxWindowCells> window_ty{};
+                        for (int row = row_band.start; row < row_band.end; ++row) {
+                            const int grid_row = row_band.offset + (row * stride_r);
+                            const int row_offset = grid_row * cols;
+                            for (int col = col_band.start; col < col_band.end; ++col) {
+                                const int grid_col = col_band.offset + (col * stride_c);
+                                const int target_id = row_offset + grid_col;
+                                if (target_id >= fixed_start) {
+                                    continue;
+                                }
+                                if (!usable.empty() && usable[static_cast<std::size_t>(target_id)] == 0) {
+                                    continue;
+                                }
+                                active_targets[cell_count] = target_id;
+                                window_tx[cell_count] = xs[static_cast<std::size_t>(grid_col)];
+                                window_ty[cell_count] = ys[static_cast<std::size_t>(grid_row)];
+                                ++cell_count;
                             }
-                            if (!usable.empty() && usable[static_cast<std::size_t>(target_id)] == 0) {
-                                continue;
-                            }
-                            active_targets[cell_count++] = target_id;
                         }
                         if (cell_count <= 1) {
-                            results[window_idx] = local;
                             continue;
                         }
 
@@ -531,24 +494,23 @@ CleanupResult run_cleanup(
                             }
                         }
                         if (point_count == 0) {
-                            results[window_idx] = local;
                             continue;
                         }
 
                         std::array<double, kMaxWindowCells * kMaxWindowCells> cost{};
                         std::array<int, kMaxWindowCells> col4row{};
                         for (int i = 0; i < point_count; ++i) {
-                            const int point_id = window_points[i];
-                            const double px = ax[static_cast<std::size_t>(point_id)];
-                            const double py = ay[static_cast<std::size_t>(point_id)];
+                            const auto point_id =
+                                static_cast<std::size_t>(window_points[i]);
+                            const double px = points[2 * point_id];
+                            const double py = points[(2 * point_id) + 1];
                             const int row_offset = i * cell_count;
                             for (int j = 0; j < cell_count; ++j) {
-                                const int target_j = active_targets[j];
                                 cost[static_cast<std::size_t>(row_offset + j)] = squared_distance(
                                     px,
                                     py,
-                                    target_x[static_cast<std::size_t>(target_j)],
-                                    target_y[static_cast<std::size_t>(target_j)]
+                                    window_tx[static_cast<std::size_t>(j)],
+                                    window_ty[static_cast<std::size_t>(j)]
                                 );
                             }
                         }
@@ -572,18 +534,27 @@ CleanupResult run_cleanup(
                             new_cost += cost[static_cast<std::size_t>(row_offset + col4row[i])];
                         }
                         if (incumbent_cost - new_cost <= 1e-12 * incumbent_cost) {
-                            results[window_idx] = local;
                             continue;
                         }
 
-                        local.solved = true;
-                        local.len = point_count;
                         for (int i = 0; i < point_count; ++i) {
-                            local.point_ids[static_cast<std::size_t>(i)] = window_points[i];
-                            local.assigned_target_ids[static_cast<std::size_t>(i)] =
+                            const int point_id = window_points[i];
+                            const int target_id =
                                 active_targets[static_cast<std::size_t>(col4row[static_cast<std::size_t>(i)])];
+                            const int previous_target = assignment[static_cast<std::size_t>(point_id)];
+                            if (previous_target == target_id) {
+                                continue;
+                            }
+                            if (owner[static_cast<std::size_t>(previous_target)] == point_id) {
+                                owner[static_cast<std::size_t>(previous_target)] = -1;
+                            }
+                            assignment[static_cast<std::size_t>(point_id)] = target_id;
+                            owner[static_cast<std::size_t>(target_id)] = point_id;
+                            ++local_changes;
                         }
-                        results[window_idx] = local;
+                    }
+                    if (local_changes != 0) {
+                        round_changes.fetch_add(local_changes, std::memory_order_relaxed);
                     }
                 } catch (...) {
                     phase_failed.store(1, std::memory_order_relaxed);
@@ -595,12 +566,12 @@ CleanupResult run_cleanup(
             };
 
             if (thread_count == 1) {
-                solve_window_range(0, phase.size());
+                solve_window_range(0, window_count);
             } else {
                 std::vector<std::thread> workers;
                 workers.reserve(static_cast<std::size_t>(thread_count));
-                const std::size_t base_chunk = phase.size() / static_cast<std::size_t>(thread_count);
-                const std::size_t remainder = phase.size() % static_cast<std::size_t>(thread_count);
+                const std::size_t base_chunk = window_count / static_cast<std::size_t>(thread_count);
+                const std::size_t remainder = window_count % static_cast<std::size_t>(thread_count);
                 std::size_t begin = 0;
                 for (int thread_idx = 0; thread_idx < thread_count; ++thread_idx) {
                     const std::size_t extra = static_cast<std::size_t>(thread_idx) < remainder ? 1 : 0;
@@ -619,26 +590,6 @@ CleanupResult run_cleanup(
 
             if (phase_failed.load(std::memory_order_relaxed) != 0) {
                 throw std::runtime_error("window LAP failed");
-            }
-
-            for (const auto& solved : results) {
-                if (!solved.solved) {
-                    continue;
-                }
-                for (int i = 0; i < solved.len; ++i) {
-                    const int point_id = solved.point_ids[static_cast<std::size_t>(i)];
-                    const int target_id = solved.assigned_target_ids[static_cast<std::size_t>(i)];
-                    const int previous_target = assignment[static_cast<std::size_t>(point_id)];
-                    if (previous_target == target_id) {
-                        continue;
-                    }
-                    if (owner[static_cast<std::size_t>(previous_target)] == point_id) {
-                        owner[static_cast<std::size_t>(previous_target)] = -1;
-                    }
-                    assignment[static_cast<std::size_t>(point_id)] = target_id;
-                    owner[static_cast<std::size_t>(target_id)] = point_id;
-                    ++round_changes;
-                }
             }
         }
 
