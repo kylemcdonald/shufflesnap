@@ -7,7 +7,7 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "megalap"
-version = "0.2.0"
+version = "0.3.0"
 description = "Multiscale window solver for large point-to-grid assignment."
 readme = "README_PYPI.md"
 requires-python = ">=3.10"

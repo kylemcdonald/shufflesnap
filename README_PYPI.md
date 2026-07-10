@@ -33,7 +33,7 @@ Behavior:
 
 - chooses a destination grid automatically when `width` and `height` are omitted: an exact factorization of `n` with aspect ratio in `[1:1, 2:1]` when one exists, otherwise a slightly larger near-square grid
 - supports any `n <= width * height` directly: leftover cells stay empty and drift toward the sparsest parts of the cloud during cleanup (no padding, no ghost points)
-- by default cleanup runs until it converges (no window can improve the assignment); `cleanup_seconds` caps the time instead, and `0.0` returns the raw seed
+- by default cleanup runs until it converges (no window can improve the assignment); `cleanup_seconds` caps the time instead, and `0.0` returns the raw seed (a deterministic random permutation; a random cell subset when the grid has more cells than points)
 - pass `mask` (a `(height, width)` bool array) to restrict which cells may be used — shaped atlases (circles, cut corners, a half-empty last row) work out of the box
 
 Returns:

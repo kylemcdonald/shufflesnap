@@ -19,7 +19,7 @@ A window is at most `6x6` cells. At stride 1, windows cover contiguous cells and
 Properties:
 
 - **Anytime and monotone.** The assignment is legal after every round and the cost never increases.
-- **Seed-independent.** Even from a random permutation, a few rounds reach a fraction of a percent above the exact optimum.
+- **Self-seeding.** The default seed is a deterministic random permutation: it reaches a fraction of a percent above the exact optimum in a few rounds, and converges lower and faster than any sorted seed we tested.
 - **Linear memory.** No global cost matrix, ever.
 - **Parallel.** All windows in a phase are disjoint and solved on native C++ threads.
 - **Holes are free.** If `n < width * height`, unfilled cells drift to where they least distort the layout (window solves are rectangular). No padding or ghost points.
@@ -58,7 +58,7 @@ Assign a 2D point cloud to distinct cells of a regular grid.
 
 - `points`: `(n, 2)` float64 array-like
 - `width`, `height`: destination grid; omitted, a near-square grid with aspect ratio in `[1:1, 2:1]` is chosen (an exact factorization of `n` when one exists, otherwise a slightly larger grid — leftover cells simply stay empty)
-- `cleanup_seconds`: optional wall-clock cap; by default cleanup runs until it converges (no window can improve the assignment); `0.0` returns the raw seed
+- `cleanup_seconds`: optional wall-clock cap; by default cleanup runs until it converges (no window can improve the assignment); `0.0` returns the raw seed (a deterministic random permutation; a random cell subset when the grid has more cells than points)
 - `mask`: optional `(height, width)` bool array restricting which cells may be used, e.g. to shape the atlas or place the empty cells by hand
 - `num_threads`: `None` uses all hardware threads
 

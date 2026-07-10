@@ -132,16 +132,24 @@ def linear_sum_assignment(cost_matrix):
     )
 
 
-def _spread_seed_assignment(points: np.ndarray, usable_cells: np.ndarray) -> np.ndarray:
-    """Cheap legal seed: points sorted by (y, x) are placed on evenly spread
-    usable cells in row-major order. Exactly the identity raster when the
-    usable cells are all cells and n == cells."""
+def _random_seed_assignment(points: np.ndarray, usable_cells: np.ndarray) -> np.ndarray:
+    """Cheap legal seed, chosen by ablation (paper, initialization section).
+
+    On a full grid a random permutation converges to measurably lower fixed
+    points than any sorted seed, in fewer rounds. With holes, choosing the
+    used cells at random avoids the poor fixed points an evenly-spread
+    subset converges to on sparsely filled grids, while keeping the sorted
+    point order, which beats a shuffled one whenever holes are present.
+    Seeded, so results are deterministic."""
     n = int(points.shape[0])
     total = int(usable_cells.shape[0])
+    rng = np.random.default_rng(0)
+    if n == total:
+        return usable_cells[rng.permutation(total)].astype(np.int64)
+    cells = usable_cells[np.sort(rng.permutation(total)[:n])]
     order = np.lexsort((points[:, 0], points[:, 1]))
-    picks = np.floor(np.arange(n, dtype=np.float64) * (total / n)).astype(np.int64)
     assignment = np.empty(n, dtype=np.int64)
-    assignment[order] = usable_cells[picks]
+    assignment[order] = cells
     return assignment
 
 
@@ -240,7 +248,9 @@ def snap_to_grid(
     hand; the grid shape is taken from the mask when ``width``/``height`` are
     omitted. By default cleanup runs until it converges (no window can improve
     the assignment); pass ``cleanup_seconds`` to cap the time instead, or
-    ``0.0`` to return the raw seed.
+    ``0.0`` to return the raw seed. The seed is a deterministic random
+    permutation (a random cell subset when the grid has more cells than
+    points), which converges lower and faster than any sorted seed we tested.
     """
     pts = np.asarray(points, dtype=np.float64, order="C")
     if pts.ndim != 2 or pts.shape[1] != 2:
@@ -278,7 +288,7 @@ def snap_to_grid(
     if usable_cells.shape[0] < n:
         raise ValueError("the grid (after masking) must have at least as many cells as points")
 
-    assignment = _spread_seed_assignment(pts, usable_cells)
+    assignment = _random_seed_assignment(pts, usable_cells)
     budget = None if cleanup_seconds is None else float(cleanup_seconds)
 
     if budget is None or budget > 0.0:
