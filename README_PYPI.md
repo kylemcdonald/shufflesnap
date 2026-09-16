@@ -12,8 +12,6 @@ The public API has three functions:
 
 ## Install
 
-The renamed distribution is being prepared for its first PyPI release.
-
 ```bash
 python -m pip install shufflesnap
 ```

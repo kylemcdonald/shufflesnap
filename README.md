@@ -40,7 +40,7 @@ All three panels use the same Lab-derived coloring with source `x/y` mapped into
 
 ## Install
 
-The renamed PyPI release is pending. After publication:
+From PyPI:
 
 ```bash
 python -m pip install shufflesnap
