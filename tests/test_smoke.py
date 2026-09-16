@@ -393,3 +393,18 @@ def test_default_stride_schedule_shapes() -> None:
     anisotropic = shufflesnap.default_stride_schedule(50, 1000)
     assert anisotropic[0][0] < anisotropic[0][1]
     assert anisotropic[-1] == (1, 1)
+
+
+@pytest.mark.parametrize("extent", [7, 8, 13, 14, 200])
+@pytest.mark.parametrize("vertical", [False, True])
+@pytest.mark.parametrize("strides", [1, None])
+def test_clipped_shifted_window_connects_trailing_cells(extent, vertical, strides):
+    """The last unshifted band needs its clipped half-offset bridge."""
+    rows, cols = (extent, 1) if vertical else (1, extent)
+    points = _grid_targets(cols, rows)
+    initial = np.arange(extent, dtype=np.int64)
+    boundary = 6 * (extent // 6)
+    initial[boundary - 1], initial[boundary] = initial[boundary], initial[boundary - 1]
+    kwargs = {} if strides is None else {"strides": strides}
+    result = shufflesnap.window_cleanup(points, initial, rows=rows, cols=cols, **kwargs)
+    np.testing.assert_array_equal(result["assignment"], np.arange(extent))

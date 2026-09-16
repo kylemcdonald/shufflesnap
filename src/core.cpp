@@ -293,6 +293,9 @@ std::vector<double> build_axis_coords(int extent, double margin) {
 // of its row bands and column bands, which makes them cheap to enumerate by
 // index and pairwise disjoint, so they can be solved and applied in parallel
 // without ever being materialized.
+// Keep the clipped trailing band: for a 7-cell axis and window=6, phase=3,
+// [3,7) is the only shifted bridge between [0,6) and [6,7). The omitted
+// leading [0,3) band is already contained in [0,6).
 std::vector<AxisBand> build_axis_bands(int extent, int window, int phase, int stride) {
     std::vector<AxisBand> bands;
     for (int offset = 0; offset < stride; ++offset) {
