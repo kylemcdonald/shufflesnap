@@ -22,7 +22,7 @@ jobs:
           cache: pip
 
       - name: Install build tooling
-        run: python -m pip install -U pip build twine pytest
+        run: python -m pip install -U pip build twine pytest scipy
 
       - name: Build sdist
         run: python -m build --sdist

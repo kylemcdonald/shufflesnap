@@ -27,7 +27,7 @@ The workflow filename field takes `release.yml`, not the full path. The reposito
 From the library repository:
 
 ```bash
-python -m pip install -U build twine pytest
+python -m pip install -U build twine pytest scipy
 python -m build
 python -m twine check dist/*
 python -m pip install --force-reinstall dist/*.whl

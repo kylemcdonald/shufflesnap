@@ -41,6 +41,7 @@ examples = [
 ]
 test = [
   "pytest>=8.3",
+  "scipy>=1.10",
 ]
 release = [
   "build>=1.2",
@@ -71,4 +72,4 @@ testpaths = ["tests"]
 build = "cp310-* cp311-* cp312-* cp313-* cp314-*"
 skip = "*-win32 cp3??t-*"
 test-command = "pytest {project}/tests -q"
-test-requires = ["pytest>=8.3"]
+test-requires = ["pytest>=8.3", "scipy>=1.10"]
