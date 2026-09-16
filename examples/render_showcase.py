@@ -7,7 +7,7 @@ import zlib
 
 import numpy as np
 
-import megalap
+import shufflesnap
 
 
 def make_meandering_points(n: int, seed: int = 0) -> np.ndarray:
@@ -132,7 +132,7 @@ def write_png(path: pathlib.Path, rgb: np.ndarray) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Render a megalap showcase PNG without matplotlib.")
+    parser = argparse.ArgumentParser(description="Render a shufflesnap showcase PNG without matplotlib.")
     parser.add_argument("--grid-width", type=int, default=512)
     parser.add_argument("--grid-height", type=int, default=512)
     parser.add_argument("--image-width", type=int, default=512)
@@ -152,7 +152,7 @@ def main() -> None:
     n = args.grid_width * args.grid_height
     points = make_meandering_points(n, seed=args.seed)
     target_points = build_target_grid(args.grid_width, args.grid_height, args.margin)
-    _, assignment, _ = megalap.snap_to_grid(
+    _, assignment, _ = shufflesnap.snap_to_grid(
         points,
         width=args.grid_width,
         height=args.grid_height,

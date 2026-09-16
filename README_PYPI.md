@@ -1,8 +1,8 @@
-# megalap
+# shufflesnap
 
-`megalap` assigns large 2D point clouds to regular grids: every point gets its own grid cell, and the total squared movement is nearly minimal. It is a Python package with a native C++ core and `nanobind` bindings. The main use case is turning embeddings (UMAP, t-SNE, Isomap) into image atlases.
+`shufflesnap` assigns large 2D point clouds to regular grids: every point gets its own grid cell, and the solver seeks a small total squared movement using multiscale local descent. It is a Python package with a native C++ core and `nanobind` bindings. The main use case is turning embeddings (UMAP, t-SNE, Isomap) into image atlases.
 
-Instead of building an `n x n` cost matrix, `megalap` refines a trivial legal assignment by solving exact linear assignment problems inside small grid windows at multiple scales — coarse-to-fine strided windows repair global structure in a handful of rounds, then stride-1 windows polish. The assignment is legal after every round, the cost never increases, memory stays linear in `n`, and even a random initial permutation converges to a fraction of a percent above the exact optimum.
+Instead of building an `n x n` cost matrix, `shufflesnap` refines a trivial legal assignment by solving exact linear assignment problems inside small grid windows at multiple scales — coarse-to-fine strided windows repair global structure in a handful of rounds, then stride-1 windows polish. The assignment is legal after every round, the cost never increases, memory is linear in the number of points plus grid cells, and random initialization works well on the tested distributions. Final accuracy and the number of polishing rounds have no worst-case guarantee.
 
 The public API has three functions:
 
@@ -12,8 +12,10 @@ The public API has three functions:
 
 ## Install
 
+The renamed distribution is being prepared for its first PyPI release.
+
 ```bash
-python -m pip install megalap
+python -m pip install shufflesnap
 ```
 
 To run the matplotlib example from the source tree:
@@ -27,13 +29,14 @@ python examples/basic_usage.py
 
 ### `snap_to_grid(points, width=None, height=None, cleanup_seconds=None, ...)`
 
-High-level wrapper for snapping a 2D point cloud onto a destination grid.
+High-level wrapper for snapping a 2D point cloud onto a destination grid. Inputs must use the same coordinate system as the target grid (default range `[0.03, 0.97]` per axis); the API does not normalize inputs.
 
 Behavior:
 
 - chooses a destination grid automatically when `width` and `height` are omitted: an exact factorization of `n` with aspect ratio in `[1:1, 2:1]` when one exists, otherwise a slightly larger near-square grid
-- supports any `n <= width * height` directly: leftover cells stay empty and drift toward the sparsest parts of the cloud during cleanup (no padding, no ghost points)
-- by default cleanup runs until it converges (no window can improve the assignment); `cleanup_seconds` caps the time instead, and `0.0` returns the raw seed (a deterministic random permutation; a random cell subset when the grid has more cells than points)
+- supports any `n <= width * height` directly: the occupied cell subset is selected before cleanup and remains fixed
+- by default cleanup runs until none of the four scheduled half-offset tilings can improve the assignment; `cleanup_seconds` caps the time instead, and `0.0` returns the raw seed (a deterministic random permutation, with a fixed random cell subset when the grid has more cells than points)
+- `polish_all_offsets=True` adds one stride-1 sweep over every complete window placement after normal cleanup, reducing the remaining local error at additional cost
 - pass `mask` (a `(height, width)` bool array) to restrict which cells may be used — shaped atlases (circles, cut corners, a half-empty last row) work out of the box
 
 Returns:
@@ -51,6 +54,7 @@ Key options:
 - `budget_seconds=None` runs until converged (a full stride-1 round changes nothing)
 - `strides=None` uses the automatic coarse-to-fine schedule; pass a list to override
 - `window_size=6`
+- `all_offsets=True` uses all `window_size ** 2` tiling offsets instead of the default four and is substantially slower
 - `num_threads=None` to use `std::thread::hardware_concurrency()`
 - `fixed_suffix_count` to keep a suffix of target cells fixed; `cell_mask` to mark which cells may be used at all
 - `trace_rounds=True` to record per-round cost, elapsed time, and stride
@@ -69,6 +73,6 @@ Returns:
 
 ## More
 
-- Source repository: https://github.com/kylemcdonald/megalap
-- Issue tracker: https://github.com/kylemcdonald/megalap/issues
-- Example scripts: https://github.com/kylemcdonald/megalap/tree/main/examples
+- Source repository: https://github.com/kylemcdonald/shufflesnap
+- Issue tracker: https://github.com/kylemcdonald/shufflesnap/issues
+- Example scripts: https://github.com/kylemcdonald/shufflesnap/tree/main/examples

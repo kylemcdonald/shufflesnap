@@ -6,7 +6,7 @@ requires = [
 build-backend = "scikit_build_core.build"
 
 [project]
-name = "megalap"
+name = "shufflesnap"
 version = "0.3.0"
 description = "Multiscale window solver for large point-to-grid assignment."
 readme = "README_PYPI.md"
@@ -20,7 +20,7 @@ authors = [
   { name = "Kyle McDonald" },
 ]
 keywords = ["assignment", "lap", "point-cloud", "grid", "auction", "jv"]
-urls = { Homepage = "https://github.com/kylemcdonald/megalap", Repository = "https://github.com/kylemcdonald/megalap", Issues = "https://github.com/kylemcdonald/megalap/issues" }
+urls = { Homepage = "https://github.com/kylemcdonald/shufflesnap", Repository = "https://github.com/kylemcdonald/shufflesnap", Issues = "https://github.com/kylemcdonald/shufflesnap/issues" }
 classifiers = [
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3 :: Only",
@@ -49,7 +49,7 @@ release = [
 ]
 
 [tool.scikit-build]
-wheel.packages = ["python/megalap"]
+wheel.packages = ["python/shufflesnap"]
 build-dir = ".scikit-build/{wheel_tag}"
 
 [tool.scikit-build.sdist]
@@ -61,7 +61,7 @@ exclude = [
   "dist/**",
   "examples/__pycache__/**",
   "examples/basic_usage_output.png",
-  "python/megalap/__pycache__/**",
+  "python/shufflesnap/__pycache__/**",
 ]
 
 [tool.pytest.ini_options]

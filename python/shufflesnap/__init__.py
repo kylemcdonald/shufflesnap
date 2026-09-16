@@ -70,7 +70,8 @@ def _choose_grid_shape(n: int) -> tuple[int, int]:
 
 def default_stride_schedule(rows: int, cols: int, window_size: int = 6) -> list[tuple[int, int]]:
     """Coarse-to-fine stride schedule: starts at the smallest power-of-two
-    stride whose windows span the whole grid, halving down to (1, 1). One
+    stride satisfying stride * window_size >= axis extent, halving down
+    to (1, 1). One
     round is run at each entry; the final entry repeats until the budget
     expires or the assignment converges."""
     stride_r = 1
@@ -135,22 +136,14 @@ def linear_sum_assignment(cost_matrix):
 def _random_seed_assignment(points: np.ndarray, usable_cells: np.ndarray) -> np.ndarray:
     """Cheap legal seed, chosen by ablation (paper, initialization section).
 
-    On a full grid a random permutation converges to measurably lower fixed
-    points than any sorted seed, in fewer rounds. With holes, choosing the
-    used cells at random avoids the poor fixed points an evenly-spread
-    subset converges to on sparsely filled grids, while keeping the sorted
-    point order, which beats a shuffled one whenever holes are present.
-    Seeded, so results are deterministic."""
+    On the tested nonuniform full grids, random permutations usually reach
+    lower-cost fixed points than raster-sorted seeds. On a larger grid, the used
+    cell subset is chosen once before cleanup and remains fixed. Seeded, so
+    results are deterministic."""
     n = int(points.shape[0])
     total = int(usable_cells.shape[0])
     rng = np.random.default_rng(0)
-    if n == total:
-        return usable_cells[rng.permutation(total)].astype(np.int64)
-    cells = usable_cells[np.sort(rng.permutation(total)[:n])]
-    order = np.lexsort((points[:, 0], points[:, 1]))
-    assignment = np.empty(n, dtype=np.int64)
-    assignment[order] = cells
-    return assignment
+    return usable_cells[rng.permutation(total)[:n]].astype(np.int64)
 
 
 def _resolve_cell_mask(cell_mask, rows: int, cols: int) -> list[int]:
@@ -180,16 +173,20 @@ def window_cleanup(
     strides=None,
     trace_rounds: bool = False,
     cell_mask=None,
+    all_offsets: bool = False,
 ):
     """Improve a legal assignment with multiscale window cleanup.
 
     Runs one round per stride-schedule entry (coarse to fine by default), then
     repeats the finest stride until ``budget_seconds`` expires or a full
     stride-(1, 1) round changes nothing (``converged``). ``budget_seconds=None``
-    runs until convergence. Points may number fewer than ``rows * cols``; the
-    unassigned cells act as holes that drift to wherever they least hurt the
-    objective. ``cell_mask`` (bool, ``(rows, cols)`` or flat) marks which cells
-    may be used; masked-out cells are never assigned.
+    runs until convergence. Points may number fewer than ``rows * cols``;
+    cells unoccupied in ``initial_assignment`` remain unavailable throughout
+    cleanup. ``cell_mask`` (bool, ``(rows, cols)`` or flat) marks which cells
+    may be used; masked-out cells are never assigned. By default a round uses
+    four tiling offsets, ``(0, 0)``, ``(0, w/2)``, ``(w/2, 0)``, and
+    ``(w/2, w/2)``. ``all_offsets=True`` uses all ``w * w`` tiling offsets;
+    this is substantially slower but tests every complete window placement.
     """
     pts = np.asarray(points, dtype=np.float64, order="C")
     assignment = np.asarray(initial_assignment, dtype=np.int64, order="C")
@@ -218,6 +215,7 @@ def window_cleanup(
         _normalize_num_threads(num_threads),
         schedule,
         bool(trace_rounds),
+        bool(all_offsets),
         _resolve_cell_mask(cell_mask, int(rows), int(cols)),
     )
     result["assignment"] = np.asarray(result["assignment"], dtype=np.int64)
@@ -238,19 +236,23 @@ def snap_to_grid(
     margin: float = 0.03,
     num_threads: int | None = None,
     mask=None,
+    polish_all_offsets: bool = False,
 ):
     """Assign a 2D point cloud to distinct cells of a regular grid.
 
-    Any ``n <= width * height`` is supported directly: leftover cells stay
-    empty and drift toward the sparsest parts of the cloud during cleanup.
-    Pass ``mask`` (bool array, shape ``(height, width)``) to restrict which
-    cells may be used, e.g. to shape the atlas or to place the empty cells by
-    hand; the grid shape is taken from the mask when ``width``/``height`` are
-    omitted. By default cleanup runs until it converges (no window can improve
-    the assignment); pass ``cleanup_seconds`` to cap the time instead, or
-    ``0.0`` to return the raw seed. The seed is a deterministic random
-    permutation (a random cell subset when the grid has more cells than
-    points), which converges lower and faster than any sorted seed we tested.
+    Any ``n <= width * height`` is supported directly: the occupied cell subset
+    is selected before cleanup and remains fixed. Pass ``mask`` (bool array,
+    shape ``(height, width)``) to restrict which cells may be used, e.g. to
+    shape the atlas or choose the occupied region; the grid shape is taken from
+    the mask when ``width``/``height`` are omitted. By default cleanup runs
+    until none of the four scheduled half-offset tilings can improve the
+    assignment; pass ``cleanup_seconds`` to cap the time instead, or ``0.0`` to
+    return the raw seed. ``polish_all_offsets=True`` adds one stride-1 sweep
+    over every complete window placement after the normal cleanup; it can
+    improve the remaining local error at additional cost. The seed is a
+    deterministic random permutation (with a fixed random cell subset when the
+    grid has more cells than points), which converges lower and faster than any
+    sorted seed we tested.
     """
     pts = np.asarray(points, dtype=np.float64, order="C")
     if pts.ndim != 2 or pts.shape[1] != 2:
@@ -290,6 +292,8 @@ def snap_to_grid(
 
     assignment = _random_seed_assignment(pts, usable_cells)
     budget = None if cleanup_seconds is None else float(cleanup_seconds)
+    if polish_all_offsets and budget == 0.0:
+        raise ValueError("polish_all_offsets requires cleanup_seconds to be nonzero")
 
     if budget is None or budget > 0.0:
         cleanup = window_cleanup(
@@ -304,6 +308,22 @@ def snap_to_grid(
             cell_mask=mask,
         )
         assignment = cleanup["assignment"]
+
+    if polish_all_offsets:
+        polish = window_cleanup(
+            pts,
+            assignment,
+            rows=height,
+            cols=width,
+            budget_seconds=0.0,
+            window_size=window_size,
+            margin=margin,
+            num_threads=num_threads,
+            strides=[1],
+            all_offsets=True,
+            cell_mask=mask,
+        )
+        assignment = polish["assignment"]
 
     target_points = _build_target_grid(width, height, float(margin))
     grid_points = target_points[assignment]

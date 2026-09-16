@@ -177,11 +177,9 @@ AssignmentResult solve_square_jv_dense(const double* cost, std::size_t n) {
     return result;
 }
 
-// Rectangular Jonker-Volgenant for small problems: assigns each of n_rows
-// points to a distinct column out of n_cols >= n_rows. cost is row-major
-// n_rows x n_cols. Returns false only if the search encounters a non-finite
-// bound, which cannot happen for finite costs.
-bool solve_rect_jv_small(int n_rows, int n_cols, const double* cost, int* col4row_out) {
+// Jonker-Volgenant for square window problems. Returns false only if the
+// search encounters a non-finite bound, which cannot happen for finite costs.
+bool solve_square_jv_small(int n, const double* cost, int* col4row_out) {
     std::array<double, kMaxWindowCells> u{};
     std::array<double, kMaxWindowCells> v{};
     std::array<double, kMaxWindowCells> shortest{};
@@ -195,17 +193,17 @@ bool solve_rect_jv_small(int n_rows, int n_cols, const double* cost, int* col4ro
     col4row.fill(-1);
     row4col.fill(-1);
 
-    for (int cur_row = 0; cur_row < n_rows; ++cur_row) {
+    for (int cur_row = 0; cur_row < n; ++cur_row) {
         double min_val = 0.0;
         int i = cur_row;
-        int num_remaining = n_cols;
-        for (int it = 0; it < n_cols; ++it) {
-            remaining[it] = n_cols - it - 1;
+        int num_remaining = n;
+        for (int it = 0; it < n; ++it) {
+            remaining[it] = n - it - 1;
             shortest[it] = kInfinity;
             path[it] = -1;
             sc[it] = 0;
         }
-        for (int it = 0; it < n_rows; ++it) {
+        for (int it = 0; it < n; ++it) {
             sr[it] = 0;
         }
 
@@ -215,7 +213,7 @@ bool solve_rect_jv_small(int n_rows, int n_cols, const double* cost, int* col4ro
             double lowest = kInfinity;
             sr[i] = 1;
 
-            const int row_offset = i * n_cols;
+            const int row_offset = i * n;
             for (int it = 0; it < num_remaining; ++it) {
                 const int j = remaining[it];
                 const double reduced_cost = min_val + cost[row_offset + j] - u[i] - v[j];
@@ -246,13 +244,13 @@ bool solve_rect_jv_small(int n_rows, int n_cols, const double* cost, int* col4ro
         }
 
         u[cur_row] += min_val;
-        for (int row = 0; row < n_rows; ++row) {
+        for (int row = 0; row < n; ++row) {
             if (sr[row] && row != cur_row) {
                 const int col = col4row[row];
                 u[row] += min_val - shortest[col];
             }
         }
-        for (int col = 0; col < n_cols; ++col) {
+        for (int col = 0; col < n; ++col) {
             if (sc[col]) {
                 v[col] -= min_val - shortest[col];
             }
@@ -271,7 +269,7 @@ bool solve_rect_jv_small(int n_rows, int n_cols, const double* cost, int* col4ro
         }
     }
 
-    for (int row = 0; row < n_rows; ++row) {
+    for (int row = 0; row < n; ++row) {
         col4row_out[row] = col4row[row];
     }
     return true;
@@ -328,6 +326,7 @@ CleanupResult run_cleanup(
     int num_threads,
     const std::vector<std::int64_t>& stride_schedule,
     bool trace_rounds,
+    bool all_phase_offsets,
     const std::vector<std::int64_t>& blocked_cells
 ) {
     if (rows <= 0 || cols <= 0) {
@@ -389,14 +388,39 @@ CleanupResult run_cleanup(
         owner[static_cast<std::size_t>(target_id)] = static_cast<int>(point_id);
     }
 
+    // The occupied cell set is part of the input assignment.  When the grid
+    // has spare cells, keep every initially empty cell unavailable throughout
+    // cleanup rather than allowing emptiness to move between cells.  Avoid the
+    // extra rows * cols byte array for full grids, which matters at 1e9 cells.
+    if (n_points < n_cells) {
+        if (usable.empty()) {
+            usable.assign(n_cells, 1);
+        }
+        for (std::size_t target_id = 0; target_id < n_cells; ++target_id) {
+            if (owner[target_id] == -1) {
+                usable[target_id] = 0;
+            }
+        }
+    }
+
     // Target coordinates are a regular grid: two per-axis vectors replace the
     // dense rows * cols coordinate arrays, which matters at 1e9 cells.
     const std::vector<double> xs = build_axis_coords(cols, margin);
     const std::vector<double> ys = build_axis_coords(rows, margin);
     const int fixed_start = static_cast<int>(n_cells) - fixed_suffix_count;
 
-    const int half = std::max(1, window_size / 2);
-    const std::array<std::array<int, 2>, 4> phase_offsets = {{{0, 0}, {0, half}, {half, 0}, {half, half}}};
+    std::vector<std::array<int, 2>> phase_offsets;
+    if (all_phase_offsets) {
+        phase_offsets.reserve(static_cast<std::size_t>(window_size * window_size));
+        for (int row_offset = 0; row_offset < window_size; ++row_offset) {
+            for (int col_offset = 0; col_offset < window_size; ++col_offset) {
+                phase_offsets.push_back({row_offset, col_offset});
+            }
+        }
+    } else {
+        const int half = std::max(1, window_size / 2);
+        phase_offsets = {{0, 0}, {0, half}, {half, 0}, {half, half}};
+    }
     const std::size_t schedule_len = stride_schedule.size() / 2;
 
     const auto assignment_total_cost = [&]() {
@@ -496,6 +520,11 @@ CleanupResult run_cleanup(
                         if (point_count == 0) {
                             continue;
                         }
+                        if (point_count != cell_count) {
+                            throw std::runtime_error(
+                                "internal error: active cleanup cells must all be occupied"
+                            );
+                        }
 
                         std::array<double, kMaxWindowCells * kMaxWindowCells> cost{};
                         std::array<int, kMaxWindowCells> col4row{};
@@ -515,7 +544,7 @@ CleanupResult run_cleanup(
                             }
                         }
 
-                        if (!solve_rect_jv_small(point_count, cell_count, cost.data(), col4row.data())) {
+                        if (!solve_square_jv_small(cell_count, cost.data(), col4row.data())) {
                             phase_failed.store(1, std::memory_order_relaxed);
                             return;
                         }
@@ -661,6 +690,7 @@ NB_MODULE(_core, m) {
            int num_threads,
            std::vector<std::int64_t> stride_schedule,
            bool trace_rounds,
+           bool all_phase_offsets,
            std::vector<std::int64_t> blocked_cells) {
             if (points.ndim() != 2 || points.shape(1) != 2) {
                 throw std::runtime_error("points must have shape (n, 2)");
@@ -690,6 +720,7 @@ NB_MODULE(_core, m) {
                     num_threads,
                     stride_schedule,
                     trace_rounds,
+                    all_phase_offsets,
                     blocked_cells
                 );
             }
@@ -727,6 +758,7 @@ NB_MODULE(_core, m) {
         "num_threads"_a = 0,
         "stride_schedule"_a,
         "trace_rounds"_a = false,
+        "all_phase_offsets"_a = false,
         "blocked_cells"_a = std::vector<std::int64_t>{},
         "Run native multiscale window cleanup from an initial assignment."
     );

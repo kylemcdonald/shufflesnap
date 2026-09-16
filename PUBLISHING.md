@@ -1,8 +1,30 @@
-# Publishing `megalap`
+# Publishing `shufflesnap`
 
-## Local validation
+The distribution name, import package, native extension destination, repository URLs, and GitHub Actions workflow all use `shufflesnap`. The prepared version is 0.3.0.
 
-From the repository root:
+## Current release status
+
+The new PyPI project is not published yet. As of 2026-09-15, its public project endpoint returned 404. Publishing a renamed distribution creates a new PyPI project; it does not migrate existing installations or transfer the old project's releases. Keep the previous distribution available for existing users.
+
+This workspace has GitHub authentication but no configured PyPI upload credentials. The repository uses GitHub OIDC trusted publishing, which must be configured separately for the new project name.
+
+## One-time account setup
+
+In [PyPI publishing settings](https://pypi.org/manage/account/publishing/), add a **pending publisher** with:
+
+| Field | Value |
+| --- | --- |
+| PyPI project name | `shufflesnap` |
+| GitHub owner | `kylemcdonald` |
+| Repository | `shufflesnap` |
+| Workflow filename | `release.yml` |
+| Environment | `pypi` |
+
+The workflow filename field takes `release.yml`, not the full path. The repository already has the `pypi` environment. See [PyPI's new-project instructions](https://docs.pypi.org/trusted-publishers/creating-a-project-through-oidc/).
+
+## Validate locally
+
+From the library repository:
 
 ```bash
 python -m pip install -U build twine pytest
@@ -12,49 +34,14 @@ python -m pip install --force-reinstall dist/*.whl
 python -m pytest -q
 ```
 
-## Continuous integration
+Test an sdist installation in a separate environment as well. CI checks editable installations on Linux, macOS, and Windows and builds distributions. The release workflow builds wheels for Linux, Windows, and both macOS architectures.
 
-The repository includes:
+## Publish after account setup and review
 
-- [`.github/workflows/ci.yml`](.github/workflows/ci.yml) for editable-install tests and distribution checks
-- [`.github/workflows/release.yml`](.github/workflows/release.yml) for tagged multi-platform releases
+1. Push the reviewed source and confirm CI passes.
+2. Create and push the release tag `v0.3.0`, or dispatch `release.yml` on the reviewed commit.
+3. Confirm all wheel jobs and the PyPI publish job succeed.
+4. In a clean environment, run `pip install shufflesnap` and verify `import shufflesnap`.
+5. Update any release-status prose and confirm the package link before submitting the paper.
 
-`release.yml` builds:
-
-- one source distribution on Linux
-- wheels on Linux, macOS Intel, macOS Apple Silicon, and Windows
-
-## One-time PyPI setup
-
-Before `release.yml` can publish to PyPI:
-
-1. Create the `megalap` project on PyPI.
-2. Configure PyPI trusted publishing for GitHub repository `kylemcdonald/megalap`.
-3. Set the trusted publisher workflow file to `.github/workflows/release.yml`.
-4. Add a GitHub `pypi` environment if you want environment protection on releases.
-
-## Release steps
-
-1. Update `version` in `pyproject.toml`.
-2. Commit and push to `main`.
-3. Wait for `.github/workflows/ci.yml` to pass.
-4. Create and push a tag like `v0.1.0`.
-5. Confirm the release workflow uploads the sdist and wheels, then publishes them to PyPI.
-
-## Optional dry run
-
-If you want to verify the package manually before a real release:
-
-```bash
-python -m pip install -U pytest
-python -m build
-python -m pip install --force-reinstall dist/*.tar.gz
-python -m pytest -q
-python -m pip install --force-reinstall dist/*.whl
-python -m pytest -q
-```
-
-## Notes
-
-- The repository README keeps the hero image. PyPI uses `README_PYPI.md` as the package long description so the package page does not depend on local image assets.
-- The release workflow uses `cibuildwheel` so PyPI receives Linux, macOS, and Windows wheels instead of a single local platform wheel.
+Do not tag solely to test PyPI configuration: the release workflow publishes publicly. `README_PYPI.md` is the package long description; `README.md` also includes the visual example.

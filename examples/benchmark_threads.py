@@ -5,7 +5,7 @@ import statistics
 
 import numpy as np
 
-import megalap
+import shufflesnap
 
 
 def make_meandering_points(n: int, seed: int = 0, margin: float = 0.03) -> np.ndarray:
@@ -28,7 +28,7 @@ def summarize(label: str, rows: int, cols: int, num_threads: int | None) -> None
     passes = []
     final_cost = []
     for _ in range(3):
-        result = megalap.window_cleanup(
+        result = shufflesnap.window_cleanup(
             points,
             assignment,
             rows=rows,

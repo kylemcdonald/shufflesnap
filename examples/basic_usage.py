@@ -5,7 +5,7 @@ import pathlib
 import matplotlib.pyplot as plt
 import numpy as np
 
-import megalap
+import shufflesnap
 
 
 def make_meandering_points(n: int, seed: int = 0, margin: float = 0.03) -> np.ndarray:
@@ -56,7 +56,7 @@ def lab_to_srgb(points: np.ndarray) -> np.ndarray:
 
 def main() -> None:
     points = make_meandering_points(32 * 32, seed=0)
-    grid_points, assignment, grid_size = megalap.snap_to_grid(
+    grid_points, assignment, grid_size = shufflesnap.snap_to_grid(
         points,
         width=32,
         height=32,
@@ -74,7 +74,7 @@ def main() -> None:
     ax.set_aspect("equal")
     ax.set_xticks([])
     ax.set_yticks([])
-    ax.set_title(f"megalap snap_to_grid · grid={grid_size[0]}x{grid_size[1]}", color="white")
+    ax.set_title(f"shufflesnap snap_to_grid · grid={grid_size[0]}x{grid_size[1]}", color="white")
     fig.tight_layout()
     output = pathlib.Path(__file__).with_name("basic_usage_output.png")
     fig.savefig(output, facecolor=fig.get_facecolor(), bbox_inches="tight")

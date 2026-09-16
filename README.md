@@ -1,6 +1,6 @@
-# megalap
+# shufflesnap
 
-`megalap` assigns large 2D point clouds to regular grids: every point gets its own grid cell, and the total squared movement is nearly minimal. It is a Python package with a native C++ core and `nanobind` bindings.
+`shufflesnap` assigns large 2D point clouds to regular grids: every point gets its own grid cell, and the solver seeks a small total squared movement using multiscale local descent. It is a Python package with a native C++ core and `nanobind` bindings.
 
 The main use case is turning embeddings (UMAP, t-SNE, Isomap) into image atlases: millions of points, one thumbnail per cell, no overlap.
 
@@ -12,17 +12,19 @@ The public API is three functions:
 
 ## How it works
 
-`megalap` never builds the `n x n` cost matrix that makes exact dense assignment infeasible at scale (a million points would need 7.3 TiB). Instead it starts from a trivial legal assignment and repeatedly solves exact linear assignment problems inside small windows of the grid — at multiple scales.
+`shufflesnap` never builds the `n x n` cost matrix that makes exact dense assignment infeasible at scale (a million points would need 7.3 TiB). Instead it starts from a trivial legal assignment and repeatedly solves exact linear assignment problems inside small windows of the grid — at multiple scales.
 
 A window is at most `6x6` cells. At stride 1, windows cover contiguous cells and fix local defects. At stride `s`, the same windows cover every `s`-th cell, so one exact `36`-cell solve can move points all the way across the grid. One coarse-to-fine sweep (stride halving from grid-spanning down to 1, like the gap sequence in shell sort) repairs global structure in a handful of rounds; stride-1 rounds then polish until the budget expires or nothing changes.
+
+Each default round uses four tilings offset by half a window on either axis. Shifted tilings are clipped into smaller disjoint windows at the far grid edges; the omitted leading half-window remains covered by the unshifted phases.
 
 Properties:
 
 - **Anytime and monotone.** The assignment is legal after every round and the cost never increases.
-- **Self-seeding.** The default seed is a deterministic random permutation: it reaches a fraction of a percent above the exact optimum in a few rounds, and converges lower and faster than any sorted seed we tested.
+- **Self-seeding.** The default seed is a deterministic random permutation: on the tested nonuniform benchmarks it usually reaches lower final costs than a raster-sorted seed. There is no worst-case approximation guarantee.
 - **Linear memory.** No global cost matrix, ever.
 - **Parallel.** All windows in a phase are disjoint and solved on native C++ threads.
-- **Holes are free.** If `n < width * height`, unfilled cells drift to where they least distort the layout (window solves are rectangular). No padding or ghost points.
+- **Predetermined occupancy.** If `n < width * height`, the occupied cell subset is selected before cleanup and remains fixed.
 
 ## Showcase
 
@@ -34,14 +36,14 @@ Properties:
 
 All three panels use the same Lab-derived coloring with source `x/y` mapped into `a/b`.
 
-![megalap triptych showcase](assets/showcase_triptych_512.png)
+![shufflesnap triptych showcase](assets/showcase_triptych_512.png)
 
 ## Install
 
-From PyPI:
+The renamed PyPI release is pending. After publication:
 
 ```bash
-python -m pip install megalap
+python -m pip install shufflesnap
 ```
 
 From a local checkout:
@@ -52,14 +54,15 @@ python -m pip install -e .
 
 ## API
 
-### `snap_to_grid(points, width=None, height=None, cleanup_seconds=None, window_size=6, margin=0.03, num_threads=None, mask=None)`
+### `snap_to_grid(points, width=None, height=None, cleanup_seconds=None, window_size=6, margin=0.03, num_threads=None, mask=None, polish_all_offsets=False)`
 
 Assign a 2D point cloud to distinct cells of a regular grid.
 
-- `points`: `(n, 2)` float64 array-like
-- `width`, `height`: destination grid; omitted, a near-square grid with aspect ratio in `[1:1, 2:1]` is chosen (an exact factorization of `n` when one exists, otherwise a slightly larger grid — leftover cells simply stay empty)
-- `cleanup_seconds`: optional wall-clock cap; by default cleanup runs until it converges (no window can improve the assignment); `0.0` returns the raw seed (a deterministic random permutation; a random cell subset when the grid has more cells than points)
-- `mask`: optional `(height, width)` bool array restricting which cells may be used, e.g. to shape the atlas or place the empty cells by hand
+- `points`: `(n, 2)` float64 array-like, in the same coordinates as the target grid (default range `[0.03, 0.97]` on each axis); inputs are not automatically normalized
+- `width`, `height`: destination grid; omitted, a near-square grid with aspect ratio in `[1:1, 2:1]` is chosen (an exact factorization of `n` when one exists, otherwise a slightly larger grid with occupancy fixed before cleanup)
+- `cleanup_seconds`: optional wall-clock cap; by default cleanup runs until none of the four scheduled half-offset tilings can improve the assignment; `0.0` returns the raw seed (a deterministic random permutation, with a fixed random cell subset when the grid has more cells than points)
+- `polish_all_offsets`: after normal cleanup, run one stride-1 sweep over all `window_size ** 2` tiling offsets; this tests every complete window placement and can reduce the remaining local error at additional cost
+- `mask`: optional `(height, width)` bool array restricting which cells may be used, e.g. to shape the atlas or choose its occupied region
 - `num_threads`: `None` uses all hardware threads
 
 Returns:
@@ -68,13 +71,14 @@ Returns:
 - `assignment`: `(n,)` int64 array of destination cell ids (`row * width + col`)
 - `(width, height)`: the destination grid size
 
-### `window_cleanup(points, initial_assignment, rows, cols, budget_seconds=None, window_size=6, margin=0.03, num_threads=None, fixed_suffix_count=0, strides=None, trace_rounds=False, cell_mask=None)`
+### `window_cleanup(points, initial_assignment, rows, cols, budget_seconds=None, window_size=6, margin=0.03, num_threads=None, fixed_suffix_count=0, strides=None, trace_rounds=False, cell_mask=None, all_offsets=False)`
 
 Improve any legal assignment with multiscale window cleanup.
 
-- `points` may number fewer than `rows * cols`; unassigned cells act as movable holes
+- `points` may number fewer than `rows * cols`; cells unoccupied in `initial_assignment` remain unavailable throughout cleanup
 - `budget_seconds=None` runs until converged (a full stride-1 round changes nothing)
 - `strides=None` uses `default_stride_schedule(rows, cols, window_size)`: one round per stride, coarse to fine, then stride 1 repeats. Pass a custom list of strides (ints or `(row, col)` pairs) to override; the last entry repeats.
+- `all_offsets=False` uses the four scheduled tilings at offsets `0` and `window_size // 2` on each axis; `True` uses all `window_size ** 2` tiling offsets and is substantially slower
 - `fixed_suffix_count` keeps a suffix of target cells locked; `cell_mask` marks which cells may be used at all
 - `trace_rounds=True` adds per-round `round_elapsed_s`, `round_costs`, `round_strides` arrays to the result
 
@@ -90,10 +94,10 @@ Returns `(row_ind, col_ind, total_cost)`.
 
 ```python
 import numpy as np
-import megalap
+import shufflesnap
 
 points = np.random.default_rng(0).random((100_000, 2))
-grid_points, assignment, (width, height) = megalap.snap_to_grid(points)
+grid_points, assignment, (width, height) = shufflesnap.snap_to_grid(points)
 ```
 
 See [examples/basic_usage.py](examples/basic_usage.py) for a rendered example:
@@ -120,7 +124,7 @@ For release instructions, see [PUBLISHING.md](PUBLISHING.md).
 ## Notes
 
 - `linear_sum_assignment()` expects a square cost matrix.
-- The cleanup kernel uses windows of at most `6x6`, so the native small-LAP kernel is specialized for up to `36` cells per window; window solves are rectangular when holes are present.
+- The cleanup kernel uses windows of at most `6x6`, so the native small-LAP kernel is specialized for up to `36` occupied cells per window.
 - The native cleanup kernel uses standard C++ threads and does not depend on OpenMP.
 - With `budget_seconds=None` (run to convergence), assignments are deterministic for fixed inputs and parameters, independent of thread count. With a finite budget, the number of completed rounds can vary with machine load.
 - GitHub Actions builds release artifacts for Linux, macOS, and Windows wheels, plus an sdist.
