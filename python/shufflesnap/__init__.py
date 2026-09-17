@@ -14,15 +14,15 @@ __all__ = [
 ]
 
 
-def _build_target_grid(width: int, height: int, margin: float) -> np.ndarray:
+def _build_target_grid(width: int, height: int) -> np.ndarray:
     if width <= 0 or height <= 0:
         raise ValueError("width and height must be positive")
     if width > 1:
-        xs = np.linspace(margin, 1.0 - margin, width, dtype=np.float64)
+        xs = np.linspace(0.0, 1.0, width, dtype=np.float64)
     else:
         xs = np.array([0.5], dtype=np.float64)
     if height > 1:
-        ys = np.linspace(margin, 1.0 - margin, height, dtype=np.float64)
+        ys = np.linspace(0.0, 1.0, height, dtype=np.float64)
     else:
         ys = np.array([0.5], dtype=np.float64)
     grid_y, grid_x = np.meshgrid(ys, xs, indexing="ij")
@@ -167,7 +167,6 @@ def window_cleanup(
     cols: int,
     budget_seconds: float | None = None,
     window_size: int = 6,
-    margin: float = 0.03,
     num_threads: int | None = None,
     fixed_suffix_count: int = 0,
     strides=None,
@@ -176,6 +175,9 @@ def window_cleanup(
     all_offsets: bool = False,
 ):
     """Improve a legal assignment with multiscale window cleanup.
+
+    Target centers span [0, 1] on each axis (0.5 for a one-cell axis).
+    Inputs are not normalized.
 
     Runs one round per stride-schedule entry (coarse to fine by default), then
     repeats the finest stride until ``budget_seconds`` expires or a full
@@ -210,7 +212,6 @@ def window_cleanup(
         int(cols),
         budget,
         int(window_size),
-        float(margin),
         int(fixed_suffix_count),
         _normalize_num_threads(num_threads),
         schedule,
@@ -233,12 +234,14 @@ def snap_to_grid(
     height: int | None = None,
     cleanup_seconds: float | None = None,
     window_size: int = 6,
-    margin: float = 0.03,
     num_threads: int | None = None,
     mask=None,
     polish_all_offsets: bool = False,
 ):
     """Assign a 2D point cloud to distinct cells of a regular grid.
+
+    Target centers span [0, 1] on each axis (0.5 for a one-cell axis).
+    Inputs are not normalized.
 
     Any ``n <= width * height`` is supported directly: the occupied cell subset
     is selected before cleanup and remains fixed. Pass ``mask`` (bool array,
@@ -303,7 +306,6 @@ def snap_to_grid(
             cols=width,
             budget_seconds=budget,
             window_size=window_size,
-            margin=margin,
             num_threads=num_threads,
             cell_mask=mask,
         )
@@ -317,7 +319,6 @@ def snap_to_grid(
             cols=width,
             budget_seconds=0.0,
             window_size=window_size,
-            margin=margin,
             num_threads=num_threads,
             strides=[1],
             all_offsets=True,
@@ -325,6 +326,6 @@ def snap_to_grid(
         )
         assignment = polish["assignment"]
 
-    target_points = _build_target_grid(width, height, float(margin))
+    target_points = _build_target_grid(width, height)
     grid_points = target_points[assignment]
     return grid_points, assignment.copy(), (width, height)

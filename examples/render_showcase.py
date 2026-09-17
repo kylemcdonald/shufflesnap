@@ -20,19 +20,6 @@ def make_meandering_points(n: int, seed: int = 0) -> np.ndarray:
     return np.asarray((points - mins) / span, dtype=np.float64)
 
 
-def build_target_grid(width: int, height: int, margin: float) -> np.ndarray:
-    if width > 1:
-        xs = np.linspace(margin, 1.0 - margin, width, dtype=np.float64)
-    else:
-        xs = np.array([0.5], dtype=np.float64)
-    if height > 1:
-        ys = np.linspace(margin, 1.0 - margin, height, dtype=np.float64)
-    else:
-        ys = np.array([0.5], dtype=np.float64)
-    grid_y, grid_x = np.meshgrid(ys, xs, indexing="ij")
-    return np.column_stack([grid_x.reshape(-1), grid_y.reshape(-1)])
-
-
 def lab_to_srgb(points: np.ndarray) -> np.ndarray:
     l = np.full(points.shape[0], 72.0, dtype=np.float64)
     a = (points[:, 0] * 2.0 - 1.0) * 80.0
@@ -140,7 +127,6 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--cleanup-seconds", type=float, default=30.0)
     parser.add_argument("--mid-interp", type=float, default=0.5)
-    parser.add_argument("--margin", type=float, default=0.0)
     parser.add_argument("--num-threads", type=int, default=0)
     parser.add_argument(
         "--output",
@@ -151,17 +137,14 @@ def main() -> None:
 
     n = args.grid_width * args.grid_height
     points = make_meandering_points(n, seed=args.seed)
-    target_points = build_target_grid(args.grid_width, args.grid_height, args.margin)
-    _, assignment, _ = shufflesnap.snap_to_grid(
+    dest_points, _, _ = shufflesnap.snap_to_grid(
         points,
         width=args.grid_width,
         height=args.grid_height,
         cleanup_seconds=args.cleanup_seconds,
-        margin=args.margin,
         num_threads=None if args.num_threads == 0 else args.num_threads,
     )
 
-    dest_points = target_points[assignment]
     rgb = render_triptych(
         points,
         dest_points,

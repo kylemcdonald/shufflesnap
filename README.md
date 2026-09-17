@@ -54,11 +54,11 @@ python -m pip install -e .
 
 ## API
 
-### `snap_to_grid(points, width=None, height=None, cleanup_seconds=None, window_size=6, margin=0.03, num_threads=None, mask=None, polish_all_offsets=False)`
+### `snap_to_grid(points, width=None, height=None, cleanup_seconds=None, window_size=6, num_threads=None, mask=None, polish_all_offsets=False)`
 
 Assign a 2D point cloud to distinct cells of a regular grid.
 
-- `points`: `(n, 2)` float64 array-like, in the same coordinates as the target grid (default range `[0.03, 0.97]` on each axis); inputs are not automatically normalized
+- `points`: `(n, 2)` float64 array-like, in the same coordinates as the target grid (range `[0, 1]` on each axis); inputs are not automatically normalized
 - `width`, `height`: destination grid; omitted, a near-square grid with aspect ratio in `[1:1, 2:1]` is chosen (an exact factorization of `n` when one exists, otherwise a slightly larger grid with occupancy fixed before cleanup)
 - `cleanup_seconds`: optional wall-clock cap; by default cleanup runs until none of the four scheduled half-offset tilings can improve the assignment; `0.0` returns the raw seed (a deterministic random permutation, with a fixed random cell subset when the grid has more cells than points)
 - `polish_all_offsets`: after normal cleanup, run one stride-1 sweep over all `window_size ** 2` tiling offsets; this tests every complete window placement and can reduce the remaining local error at additional cost
@@ -71,7 +71,7 @@ Returns:
 - `assignment`: `(n,)` int64 array of destination cell ids (`row * width + col`)
 - `(width, height)`: the destination grid size
 
-### `window_cleanup(points, initial_assignment, rows, cols, budget_seconds=None, window_size=6, margin=0.03, num_threads=None, fixed_suffix_count=0, strides=None, trace_rounds=False, cell_mask=None, all_offsets=False)`
+### `window_cleanup(points, initial_assignment, rows, cols, budget_seconds=None, window_size=6, num_threads=None, fixed_suffix_count=0, strides=None, trace_rounds=False, cell_mask=None, all_offsets=False)`
 
 Improve any legal assignment with multiscale window cleanup.
 
@@ -128,3 +128,10 @@ For release instructions, see [PUBLISHING.md](PUBLISHING.md).
 - The native cleanup kernel uses standard C++ threads and does not depend on OpenMP.
 - With `budget_seconds=None` (run to convergence), assignments are deterministic for fixed inputs and parameters, independent of thread count. With a finite budget, the number of completed rounds can vary with machine load.
 - GitHub Actions builds release artifacts for Linux, macOS, and Windows wheels, plus an sdist.
+
+### Coordinate convention (next release)
+
+Grid centers span `[0, 1]` on each axis; a one-cell axis is centered at `0.5`.
+The `margin` argument has been removed. Normalize input coordinates explicitly
+when needed, and add visual padding when rendering. The API does not normalize
+inputs. PyPI 0.3.0 retains the previous inset; this source change is unreleased.

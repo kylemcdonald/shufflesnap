@@ -6,9 +6,9 @@ import pytest
 import shufflesnap
 
 
-def _grid_targets(width: int, height: int, margin: float = 0.03) -> np.ndarray:
-    xs = np.linspace(margin, 1.0 - margin, width) if width > 1 else np.array([0.5])
-    ys = np.linspace(margin, 1.0 - margin, height) if height > 1 else np.array([0.5])
+def _grid_targets(width: int, height: int) -> np.ndarray:
+    xs = np.linspace(0.0, 1.0, width) if width > 1 else np.array([0.5])
+    ys = np.linspace(0.0, 1.0, height) if height > 1 else np.array([0.5])
     gy, gx = np.meshgrid(ys, xs, indexing="ij")
     return np.column_stack([gx.ravel(), gy.ravel()])
 
@@ -69,7 +69,7 @@ def test_snap_to_grid_returns_unique_assignment_for_nonfactorable_count() -> Non
 def test_snap_to_grid_near_optimal_on_small_cloud() -> None:
     rng = np.random.default_rng(1)
     n = 20 * 20
-    points = 0.03 + 0.94 * rng.random((n, 2))
+    points = rng.random((n, 2))
 
     grid_points, assignment, (width, height) = shufflesnap.snap_to_grid(points, width=20, height=20)
 
@@ -90,7 +90,7 @@ def test_snap_to_grid_near_optimal_on_small_cloud() -> None:
 def test_snap_to_grid_with_spare_cells_keeps_occupied_subset_fixed() -> None:
     rng = np.random.default_rng(2)
     n = 700
-    points = 0.03 + 0.94 * rng.random((n, 2))
+    points = rng.random((n, 2))
 
     grid_points, assignment, (width, height) = shufflesnap.snap_to_grid(points, width=30, height=30)
 
@@ -110,7 +110,7 @@ def test_window_cleanup_converges_from_random_permutation() -> None:
     rng = np.random.default_rng(3)
     rows = cols = 24
     n = rows * cols
-    points = 0.03 + 0.94 * rng.random((n, 2))
+    points = rng.random((n, 2))
     initial = rng.permutation(n).astype(np.int64)
 
     result = shufflesnap.window_cleanup(points, initial, rows=rows, cols=cols)
@@ -131,7 +131,7 @@ def test_window_cleanup_is_deterministic() -> None:
     rng = np.random.default_rng(4)
     rows = cols = 16
     n = rows * cols
-    points = 0.03 + 0.94 * rng.random((n, 2))
+    points = rng.random((n, 2))
     initial = rng.permutation(n).astype(np.int64)
 
     first = shufflesnap.window_cleanup(points, initial, rows=rows, cols=cols, num_threads=4)
@@ -144,7 +144,7 @@ def test_window_cleanup_trace_rounds_monotone() -> None:
     rng = np.random.default_rng(5)
     rows = cols = 24
     n = rows * cols
-    points = 0.03 + 0.94 * rng.random((n, 2))
+    points = rng.random((n, 2))
     initial = rng.permutation(n).astype(np.int64)
 
     result = shufflesnap.window_cleanup(
@@ -161,7 +161,7 @@ def test_window_cleanup_respects_fixed_suffix() -> None:
     rng = np.random.default_rng(6)
     rows = cols = 8
     n = rows * cols
-    points = 0.03 + 0.94 * rng.random((n, 2))
+    points = rng.random((n, 2))
     initial = np.arange(n, dtype=np.int64)
     fixed = 8
 
@@ -186,10 +186,10 @@ def test_window_cleanup_rejects_duplicate_assignment() -> None:
 def test_window_cleanup_zero_budget_runs_one_round() -> None:
     points = np.array(
         [
-            [0.03, 0.03],
-            [0.97, 0.03],
-            [0.03, 0.97],
-            [0.97, 0.97],
+            [0.0, 0.0],
+            [1.0, 0.0],
+            [0.0, 1.0],
+            [1.0, 1.0],
         ],
         dtype=np.float64,
     )
@@ -260,7 +260,7 @@ def test_window_cleanup_trace_costs_never_increase_with_ties() -> None:
 def test_snap_to_grid_seed_is_random_permutation() -> None:
     rng = np.random.default_rng(14)
     n = 12 * 12
-    points = 0.03 + 0.94 * rng.random((n, 2))
+    points = rng.random((n, 2))
 
     _, seed_full, _ = shufflesnap.snap_to_grid(points, width=12, height=12,
                                            cleanup_seconds=0.0)
@@ -279,7 +279,7 @@ def test_snap_to_grid_seed_is_random_permutation() -> None:
 def test_snap_to_grid_spare_cell_seed_uses_fixed_random_subset() -> None:
     rng = np.random.default_rng(15)
     n = 100
-    points = 0.03 + 0.94 * rng.random((n, 2))
+    points = rng.random((n, 2))
 
     _, seed, _ = shufflesnap.snap_to_grid(points, width=12, height=12,
                                       cleanup_seconds=0.0)
@@ -295,7 +295,7 @@ def test_snap_to_grid_spare_cell_seed_uses_fixed_random_subset() -> None:
 def test_all_offset_polish_matches_manual_single_sweep() -> None:
     rng = np.random.default_rng(16)
     side = 20
-    points = 0.03 + 0.94 * rng.random((side * side, 2))
+    points = rng.random((side * side, 2))
 
     _, base, _ = shufflesnap.snap_to_grid(points, width=side, height=side)
     _, polished, _ = shufflesnap.snap_to_grid(
@@ -318,7 +318,7 @@ def test_all_offset_polish_matches_manual_single_sweep() -> None:
 
 def test_all_offset_polish_preserves_fixed_occupied_subset() -> None:
     rng = np.random.default_rng(17)
-    points = 0.03 + 0.94 * rng.random((100, 2))
+    points = rng.random((100, 2))
 
     _, seed, _ = shufflesnap.snap_to_grid(
         points, width=12, height=12, cleanup_seconds=0.0
@@ -353,7 +353,7 @@ def test_snap_to_grid_with_circle_mask() -> None:
     yy, xx = np.mgrid[0:side, 0:side]
     mask = (xx - (side - 1) / 2) ** 2 + (yy - (side - 1) / 2) ** 2 <= (side / 2) ** 2
     n = int(mask.sum()) - 10
-    points = 0.03 + 0.94 * rng.random((n, 2))
+    points = rng.random((n, 2))
 
     grid_points, assignment, (width, height) = shufflesnap.snap_to_grid(points, mask=mask)
     _, seed, _ = shufflesnap.snap_to_grid(points, mask=mask, cleanup_seconds=0.0)
@@ -377,7 +377,7 @@ def test_window_cleanup_rejects_assignment_outside_mask() -> None:
 
 def test_snap_to_grid_defaults_to_convergence() -> None:
     rng = np.random.default_rng(13)
-    points = 0.03 + 0.94 * rng.random((15 * 15, 2))
+    points = rng.random((15 * 15, 2))
 
     _, first, _ = shufflesnap.snap_to_grid(points, width=15, height=15)
     _, second, _ = shufflesnap.snap_to_grid(points, width=15, height=15)
@@ -408,3 +408,25 @@ def test_clipped_shifted_window_connects_trailing_cells(extent, vertical, stride
     kwargs = {} if strides is None else {"strides": strides}
     result = shufflesnap.window_cleanup(points, initial, rows=rows, cols=cols, **kwargs)
     np.testing.assert_array_equal(result["assignment"], np.arange(extent))
+
+
+@pytest.mark.parametrize("width,height", [(2, 2), (1, 7), (7, 1), (1, 1)])
+def test_unit_square_grid_and_native_cost_agree(width, height):
+    targets = _grid_targets(width, height)
+    points = targets[::-1].copy()
+    positions, assignment, shape = shufflesnap.snap_to_grid(
+        points, width=width, height=height
+    )
+    np.testing.assert_allclose(positions, points, atol=1e-15)
+    np.testing.assert_array_equal(np.sort(assignment), np.arange(len(points)))
+    assert shape == (width, height)
+    for axis, extent in enumerate((width, height)):
+        if extent == 1:
+            assert np.all(positions[:, axis] == 0.5)
+        else:
+            assert positions[:, axis].min() == 0.0
+            assert positions[:, axis].max() == 1.0
+    result = shufflesnap.window_cleanup(
+        points, assignment, rows=height, cols=width
+    )
+    assert result["final_cost"] < 1e-28

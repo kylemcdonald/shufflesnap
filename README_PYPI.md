@@ -27,7 +27,7 @@ python examples/basic_usage.py
 
 ### `snap_to_grid(points, width=None, height=None, cleanup_seconds=None, ...)`
 
-High-level wrapper for snapping a 2D point cloud onto a destination grid. Inputs must use the same coordinate system as the target grid (default range `[0.03, 0.97]` per axis); the API does not normalize inputs.
+High-level wrapper for snapping a 2D point cloud onto a destination grid. Inputs must use the same coordinate system as the target grid (range `[0, 1]` per axis); the API does not normalize inputs.
 
 Behavior:
 
@@ -74,3 +74,10 @@ Returns:
 - Source repository: https://github.com/kylemcdonald/shufflesnap
 - Issue tracker: https://github.com/kylemcdonald/shufflesnap/issues
 - Example scripts: https://github.com/kylemcdonald/shufflesnap/tree/main/examples
+
+### Coordinate convention (next release)
+
+Grid centers span `[0, 1]` on each axis; a one-cell axis is centered at `0.5`.
+The `margin` argument has been removed. Normalize input coordinates explicitly
+when needed, and add visual padding when rendering. The API does not normalize
+inputs. PyPI 0.3.0 retains the previous inset; this source change is unreleased.

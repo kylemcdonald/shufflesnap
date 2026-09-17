@@ -8,7 +8,7 @@ import numpy as np
 import shufflesnap
 
 
-def make_meandering_points(n: int, seed: int = 0, margin: float = 0.03) -> np.ndarray:
+def make_meandering_points(n: int, seed: int = 0) -> np.ndarray:
     rng = np.random.default_rng(seed)
     steps = rng.normal(loc=0.0, scale=1.0, size=(n, 2))
     points = np.cumsum(steps, axis=0)
@@ -16,7 +16,6 @@ def make_meandering_points(n: int, seed: int = 0, margin: float = 0.03) -> np.nd
     maxs = points.max(axis=0)
     span = np.maximum(maxs - mins, np.finfo(np.float64).eps)
     points = (points - mins) / span
-    points = margin + (1.0 - 2.0 * margin) * points
     return np.asarray(points, dtype=np.float64)
 
 

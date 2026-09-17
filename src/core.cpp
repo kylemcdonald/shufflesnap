@@ -275,12 +275,12 @@ bool solve_square_jv_small(int n, const double* cost, int* col4row_out) {
     return true;
 }
 
-std::vector<double> build_axis_coords(int extent, double margin) {
+std::vector<double> build_axis_coords(int extent) {
     std::vector<double> coords(static_cast<std::size_t>(extent), 0.5);
     if (extent > 1) {
-        const double step = (1.0 - (2.0 * margin)) / static_cast<double>(extent - 1);
+        const double step = 1.0 / static_cast<double>(extent - 1);
         for (int i = 0; i < extent; ++i) {
-            coords[static_cast<std::size_t>(i)] = margin + (step * static_cast<double>(i));
+            coords[static_cast<std::size_t>(i)] = step * static_cast<double>(i);
         }
     }
     return coords;
@@ -324,7 +324,6 @@ CleanupResult run_cleanup(
     int cols,
     double budget_seconds,
     int window_size,
-    double margin,
     int fixed_suffix_count,
     int num_threads,
     const std::vector<std::int64_t>& stride_schedule,
@@ -408,8 +407,8 @@ CleanupResult run_cleanup(
 
     // Target coordinates are a regular grid: two per-axis vectors replace the
     // dense rows * cols coordinate arrays, which matters at 1e9 cells.
-    const std::vector<double> xs = build_axis_coords(cols, margin);
-    const std::vector<double> ys = build_axis_coords(rows, margin);
+    const std::vector<double> xs = build_axis_coords(cols);
+    const std::vector<double> ys = build_axis_coords(rows);
     const int fixed_start = static_cast<int>(n_cells) - fixed_suffix_count;
 
     std::vector<std::array<int, 2>> phase_offsets;
@@ -688,7 +687,6 @@ NB_MODULE(_core, m) {
            int cols,
            double budget_seconds,
            int window_size,
-           double margin,
            int fixed_suffix_count,
            int num_threads,
            std::vector<std::int64_t> stride_schedule,
@@ -718,7 +716,6 @@ NB_MODULE(_core, m) {
                     cols,
                     budget_seconds,
                     window_size,
-                    margin,
                     fixed_suffix_count,
                     num_threads,
                     stride_schedule,
@@ -756,7 +753,6 @@ NB_MODULE(_core, m) {
         "cols"_a,
         "budget_seconds"_a,
         "window_size"_a = 6,
-        "margin"_a = 0.03,
         "fixed_suffix_count"_a = 0,
         "num_threads"_a = 0,
         "stride_schedule"_a,
