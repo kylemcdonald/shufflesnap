@@ -328,4 +328,4 @@ def snap_to_grid(
 
     target_points = _build_target_grid(width, height)
     grid_points = target_points[assignment]
-    return grid_points, assignment.copy(), (width, height)
+    return grid_points, assignment, (width, height)

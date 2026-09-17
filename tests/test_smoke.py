@@ -430,3 +430,23 @@ def test_unit_square_grid_and_native_cost_agree(width, height):
         points, assignment, rows=height, cols=width
     )
     assert result["final_cost"] < 1e-28
+
+
+@pytest.mark.parametrize("budget,polish", [(0.0, False), (None, False), (None, True)])
+def test_snap_results_keep_independent_live_buffers(budget, polish):
+    import gc
+
+    points = np.random.default_rng(10).random((36, 2))
+    original = points.copy()
+    positions, assignment, _ = shufflesnap.snap_to_grid(
+        points, width=6, height=6, cleanup_seconds=budget,
+        polish_all_offsets=polish,
+    )
+    gc.collect()
+    np.testing.assert_array_equal(np.sort(assignment), np.arange(36))
+    expected_positions = positions.copy()
+    assert assignment.flags.writeable
+    assert not np.shares_memory(positions, assignment)
+    assignment[0] = assignment[1]
+    np.testing.assert_array_equal(positions, expected_positions)
+    np.testing.assert_array_equal(points, original)
