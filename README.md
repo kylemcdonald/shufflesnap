@@ -65,6 +65,30 @@ the result, and the result is also independent of the number of threads (both ar
 Explicit arguments (`window=`, `ratio=`, `schedule=`, `rounds_per_stride=`,
 `start_stride=`, `init=`) override the preset.
 
+## Measured performance
+
+Held-out instances, 100,000 points, square grid, i9-12900KS. The table gives excess over a
+**certified** optimum (mean of three instances), with time on one core (24 threads in
+parentheses). The full benchmark, including failures, is in the paper repository.
+
+| method | uniform | Gaussian mixture | spiral | jittered lattice | time |
+|---|---|---|---|---|---|
+| `baseline` | 2.5% | 0.011% | 0.023% | 33% | 5.1 s (0.35 s) |
+| `fast` | 1.5% | 0.008% | 0.012% | 23% | 6.9 s (0.47 s) |
+| `balanced` | 0.84% | 0.002% | 0.004% | 13% | 16 s (1.1 s) |
+| `quality` | 0.44% | <0.001% | 0.001% | 7.4% | 52 s (3.9 s) |
+| BSP-OT (64 plans) | 32% | 3.7% | 8.1% | 46% | 2.9 s (0.42 s) |
+| RasterFairy (upstream) | 45% | 17% | 27% | 13% | 3.0 s |
+| certified exact (`shufflesnap.exact`) | 0 | 0 | 0 | 0 | median 128 s |
+
+On the full MNIST and Fashion-MNIST UMAP embeddings (70,000 points each), `balanced` is
+within 0.002% of the optimum. Where ShuffleSnap is weakest:
+
+- near-uniform data, whose excess grows with N (5.3% for `baseline` at 1M points);
+- the jittered lattice;
+- masks with concave bays, where `baseline` was 18% above optimal on an S shape;
+- grids with surplus cells.
+
 ## Grids
 
 ```python
