@@ -141,8 +141,10 @@ pip install -e ".[test]"        # or ./dev_build.sh for an in-place build
 pytest -q
 ```
 
-The compiled kernel is C++17 (nanobind), parallelized with OpenMP when available.
-Build time is about 2 s; there is no JIT, so there is no first-call compilation cost.
+The compiled kernel is C++17 (nanobind), parallelized with OpenMP when available. On the
+benchmark machine, compiling takes 2.6 s with Ninja (7.8 s on one core); an isolated
+source build (`pip install .`) takes about 35 s, most of it setting up the build
+environment. There is no JIT, so nothing is compiled on first call.
 
 ## License
 
