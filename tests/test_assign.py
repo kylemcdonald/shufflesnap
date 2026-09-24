@@ -129,3 +129,44 @@ def test_solvers_agree_on_cost_and_validity():
         # both solvers are exact, so each window reaches the same optimal cost; ties may
         # be broken differently, so assignments can differ slightly in the end
         assert abs(a.cost - b.cost) <= 0.02 * a.cost
+
+
+def test_presets_and_explicit_overrides():
+    rng = np.random.default_rng(12)
+    P = rng.normal(size=(6000, 2))
+    base = ss.assign(P, preset="baseline", seed=3)
+    explicit = ss.assign(P, preset="balanced", window=6, schedule="halving", seed=3)
+    assert np.array_equal(base.cell, explicit.cell)
+    assert base.config["stages"][0][:2] == [16, 16]
+    for name in ss.PRESETS:
+        r = ss.assign(P, preset=name, seed=3)
+        check(r, 6000)
+    with pytest.raises(ValueError):
+        ss.assign(P, preset="nope")
+
+
+def _rotated_ring(W, H, x0, y0, rw, rh):
+    g = ss.Grid.rectangle(W, H)
+    P = g.centers.astype(float).copy()  # points on cell centers: the optimum is the identity (cost 0)
+    ring = ([(x, y0) for x in range(x0, x0 + rw)] + [(x0 + rw - 1, y) for y in range(y0 + 1, y0 + rh)]
+            + [(x, y0 + rh - 1) for x in range(x0 + rw - 2, x0 - 1, -1)] + [(x0, y) for y in range(y0 + rh - 2, y0, -1)])
+    ids = [g.index[y, x] for x, y in ring]
+    pos = np.arange(g.n_cells, dtype=np.int32)
+    for k in range(len(ids)):
+        pos[ids[k]] = ids[(k + 1) % len(ids)]
+    return g, P, pos, len(ids)
+
+
+def test_rotated_ring_larger_than_windows_is_a_fixed_point():
+    """Documents the central limitation: a closed loop of one-cell shifts that no window
+    contains is left untouched at every stride, although the optimum has cost 0."""
+    for w in (6, 8, 12):
+        g, P, pos, L = _rotated_ring(64, 48, 10, 10, w + 1, w + 1)
+        stages = ss.build_schedule(g.width, g.height, window=w, schedule="geometric", ratio=2 ** 0.5)
+        tr, _ = ss.run_schedule(P, g, pos, stages, window=w)
+        assert tr[:, 10].sum() == 0
+        assert ss.assignment_cost(P, g, pos) == L
+        # a ring that fits in one of the four shifted tilings is repaired
+        g, P, pos, L = _rotated_ring(64, 48, 10, 10, w // 2 + 1, w // 2 + 1)
+        ss.run_schedule(P, g, pos, stages, window=w)
+        assert ss.assignment_cost(P, g, pos) == 0
