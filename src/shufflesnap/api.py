@@ -146,10 +146,11 @@ def initial_assignment(P: np.ndarray, grid: Grid, init="random", seed=0) -> np.n
     """Starting cell of every point (int32, injective)."""
     N, M = len(P), grid.n_cells
     if isinstance(init, np.ndarray) or isinstance(init, (list, tuple)):
-        pos = np.ascontiguousarray(np.asarray(init, dtype=np.int32))
+        pos = np.array(init, dtype=np.int64)
         if pos.shape != (N,):
             raise ValueError("explicit init must have one cell per point")
-        return pos
+        _check_cells(pos, M)
+        return np.ascontiguousarray(pos.astype(np.int32))
     if init == "random":
         rng = np.random.default_rng(seed)
         return rng.permutation(M)[:N].astype(np.int32)
@@ -165,10 +166,22 @@ def initial_assignment(P: np.ndarray, grid: Grid, init="random", seed=0) -> np.n
 SOLVERS = {"hungarian": 0, "jv": 1, "hungarian_greedy": 2}
 
 
+def _check_cells(pos, M):
+    if len(pos) and (pos.min() < 0 or pos.max() >= M):
+        raise ValueError("cell index out of range")
+    if len(np.unique(pos)) != len(pos):
+        raise ValueError("two points share a cell")
+
+
 def run_schedule(P, grid: Grid, pos: np.ndarray, stages, window=6, offsets=None, time_budget=None,
                  threads=0, tol_rel=1e-12, skip_clean=True, solver="hungarian_greedy"):
-    """Low-level: improve ``pos`` in place under a stage table. Returns (trace, finished)."""
+    """Low-level: improve ``pos`` (int32, C-contiguous, one distinct cell per point) in place
+    under a stage table.  Returns (trace, finished)."""
+    P = np.ascontiguousarray(P, dtype=np.float64)
     N, M = len(P), grid.n_cells
+    if not (isinstance(pos, np.ndarray) and pos.dtype == np.int32 and pos.flags.c_contiguous and pos.shape == (N,)):
+        raise TypeError("pos must be a C-contiguous int32 array with one entry per point (it is updated in place)")
+    _check_cells(pos, M)
     occ = np.full(M, -1, dtype=np.int32)
     occ[pos] = np.arange(N, dtype=np.int32)
     offsets = default_offsets(window) if offsets is None else np.ascontiguousarray(offsets, dtype=np.int32)

@@ -170,3 +170,17 @@ def test_rotated_ring_larger_than_windows_is_a_fixed_point():
         g, P, pos, L = _rotated_ring(64, 48, 10, 10, w // 2 + 1, w // 2 + 1)
         ss.run_schedule(P, g, pos, stages, window=w)
         assert ss.assignment_cost(P, g, pos) == 0
+
+
+
+def test_invalid_explicit_start_is_rejected():
+    rng = np.random.default_rng(0)
+    P = rng.random((100, 2))
+    g = ss.Grid.for_count(100)
+    with pytest.raises(ValueError):
+        ss.assign(P, g, init=np.zeros(100, dtype=int))  # duplicates
+    with pytest.raises(ValueError):
+        ss.assign(P, g, init=np.arange(100) + 1)  # out of range
+    pos = np.arange(100, dtype=np.int64)
+    with pytest.raises(TypeError):
+        ss.run_schedule(P, g, pos, ss.build_schedule(g.width, g.height))
