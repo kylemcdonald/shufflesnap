@@ -1,0 +1,287 @@
+"""Public ShuffleSnap interface."""
+
+from __future__ import annotations
+
+import time
+from dataclasses import dataclass, field
+
+import numpy as np
+
+from . import _core
+from .grid import Grid
+from .normalize import normalize_points
+
+__all__ = [
+    "assign",
+    "Result",
+    "build_schedule",
+    "default_offsets",
+    "initial_assignment",
+    "run_schedule",
+    "TRACE_COLUMNS",
+]
+
+TRACE_COLUMNS = (
+    "elapsed_s",  # seconds since assign() was called (includes normalization and start)
+    "cost",  # total squared displacement after the phase
+    "stage",  # stage index in the schedule (-1 for the starting assignment)
+    "round",  # round index within the stage
+    "phase",  # offset index within the round
+    "sx",
+    "sy",
+    "windows",  # windows in the phase
+    "solved",  # windows actually solved (others skipped as unchanged)
+    "improved",  # windows whose occupants were reassigned
+    "moved",  # points that changed cell
+)
+
+
+def _start_stride(length: int, window: int) -> int:
+    """Smallest power of two s with window * s >= length."""
+    s = 1
+    while window * s < length:
+        s *= 2
+    return s
+
+
+def default_offsets(window: int = 6):
+    """The four tilings of one round: shifts (0,0), (0,h), (h,0), (h,h), h = window // 2."""
+    h = window // 2
+    if h == 0:
+        return np.array([[0, 0]], dtype=np.int32)
+    return np.array([[0, 0], [0, h], [h, 0], [h, h]], dtype=np.int32)
+
+
+def _stride_sequence(length: int, window: int, ratio: float, start_stride=None):
+    s0 = _start_stride(length, window)
+    if start_stride is not None:
+        s0 = min(s0, int(start_stride))
+    out, x = [], float(s0)
+    while x > 1.0 + 1e-9:
+        out.append(max(1, int(round(x))))
+        x /= ratio
+    return out
+
+
+def build_schedule(width: int, height: int, window: int = 6, schedule="halving", start_stride=None,
+                   rounds_per_stride: int = 1, final_rounds=None, ratio: float = 2.0) -> np.ndarray:
+    """Return the stage table ``(sx, sy, max_rounds, stop_when_no_moves)``.
+
+    ``"halving"`` (the baseline): per axis of length L start at the smallest power of two
+    s with ``window * s >= L``; run ``rounds_per_stride`` rounds; halve each stride
+    (never below 1) until both are 1; then run stride-1 rounds until a full round makes
+    no move (or ``final_rounds`` rounds, if given).  ``"geometric"`` divides the strides
+    by ``ratio`` instead of 2 (rounded to integers, repeated values dropped); ratio 2
+    reproduces ``"halving"``.  ``start_stride`` caps the starting stride on both axes.
+    ``"flat"`` skips the coarse levels (stride 1 only).  A list of
+    ``(sx, sy, rounds, stop)`` rows is used verbatim.
+    """
+    fin = -1 if final_rounds is None else int(final_rounds)
+    if not isinstance(schedule, str):
+        return np.ascontiguousarray(np.asarray(schedule, dtype=np.int32).reshape(-1, 4))
+    if schedule == "flat":
+        return np.array([[1, 1, fin, 1]], dtype=np.int32)
+    if schedule == "halving":
+        ratio = 2.0
+    elif schedule != "geometric":
+        raise ValueError("schedule must be 'halving', 'geometric', 'flat' or an explicit stage list")
+    if not ratio > 1.0:
+        raise ValueError("ratio must be > 1")
+    sx = _stride_sequence(width, window, ratio, start_stride)
+    sy = _stride_sequence(height, window, ratio, start_stride)
+    n = max(len(sx), len(sy))
+    sx += [1] * (n - len(sx))
+    sy += [1] * (n - len(sy))
+    stages = []
+    for a, b in zip(sx, sy):
+        if (a, b) != (1, 1) and (not stages or stages[-1][:2] != (a, b)):
+            stages.append((a, b, int(rounds_per_stride), 0))
+    stages.append((1, 1, fin, 1))
+    return np.array(stages, dtype=np.int32)
+
+
+def _rowsort(P: np.ndarray, grid: Grid) -> np.ndarray:
+    """Start that sorts points into rows by y, then along each row by x."""
+    N, M = len(P), grid.n_cells
+    lat = grid.lattice
+    rows, counts = np.unique(lat[:, 1], return_counts=True)
+    if N == M:
+        quota = counts.copy()
+    else:
+        exact = counts * (N / M)
+        quota = np.floor(exact).astype(np.int64)
+        rem = N - quota.sum()
+        order = np.argsort(-(exact - quota), kind="stable")
+        quota[order[:rem]] += 1
+    order_y = np.lexsort((P[:, 0], P[:, 1]))
+    pos = np.empty(N, dtype=np.int32)
+    start = 0
+    for r, cnt, q in zip(rows, counts, quota):
+        if q == 0:
+            continue
+        pts = order_y[start:start + q]
+        start += q
+        pts = pts[np.lexsort((P[pts, 1], P[pts, 0]))]
+        cells = np.nonzero(lat[:, 1] == r)[0]  # row-major => sorted by x
+        if q < cnt:
+            pick = np.round(np.linspace(0, cnt - 1, q)).astype(np.int64)
+            cells = cells[pick]
+        pos[pts] = cells.astype(np.int32)
+    return pos
+
+
+def initial_assignment(P: np.ndarray, grid: Grid, init="random", seed=0) -> np.ndarray:
+    """Starting cell of every point (int32, injective)."""
+    N, M = len(P), grid.n_cells
+    if isinstance(init, np.ndarray) or isinstance(init, (list, tuple)):
+        pos = np.ascontiguousarray(np.asarray(init, dtype=np.int32))
+        if pos.shape != (N,):
+            raise ValueError("explicit init must have one cell per point")
+        return pos
+    if init == "random":
+        rng = np.random.default_rng(seed)
+        return rng.permutation(M)[:N].astype(np.int32)
+    if init == "bisect":
+        pos = np.empty(N, dtype=np.int32)
+        _core.init_bisect(P, grid.centers, pos)
+        return pos
+    if init == "rowsort":
+        return _rowsort(P, grid)
+    raise ValueError("init must be 'random', 'bisect', 'rowsort' or an array")
+
+
+SOLVERS = {"hungarian": 0, "jv": 1, "hungarian_greedy": 2}
+
+
+def run_schedule(P, grid: Grid, pos: np.ndarray, stages, window=6, offsets=None, time_budget=None,
+                 threads=0, tol_rel=1e-12, skip_clean=True, solver="hungarian_greedy"):
+    """Low-level: improve ``pos`` in place under a stage table. Returns (trace, finished)."""
+    N, M = len(P), grid.n_cells
+    occ = np.full(M, -1, dtype=np.int32)
+    occ[pos] = np.arange(N, dtype=np.int32)
+    offsets = default_offsets(window) if offsets is None else np.ascontiguousarray(offsets, dtype=np.int32)
+    stages = np.ascontiguousarray(stages, dtype=np.int32)
+    tb = -1.0 if time_budget is None else float(time_budget)
+    flat, finished = _core.run_schedule(P, grid.index, grid.centers, occ, pos, stages, offsets, int(window), tb,
+                                        int(threads), float(tol_rel), bool(skip_clean), SOLVERS[solver])
+    trace = np.asarray(flat, dtype=np.float64).reshape(-1, len(TRACE_COLUMNS))
+    return trace, bool(finished)
+
+
+@dataclass
+class Result:
+    """Outcome of :func:`assign`.
+
+    ``cell[i]`` is the id of the cell given to point ``i``; ``xy`` gives its lattice
+    column/row.  ``cost`` is the total squared displacement in grid units between the
+    normalized points and their cell centers.
+    """
+
+    cell: np.ndarray
+    grid: Grid
+    points: np.ndarray
+    cost: float
+    finished: bool
+    trace: np.ndarray
+    timings: dict
+    config: dict
+    snapshots: list = field(default_factory=list)
+
+    @property
+    def xy(self) -> np.ndarray:
+        return self.grid.lattice[self.cell]
+
+    @property
+    def mean_sq_displacement(self) -> float:
+        return self.cost / max(1, len(self.cell))
+
+    def trace_dict(self) -> dict:
+        return {c: self.trace[:, i] for i, c in enumerate(TRACE_COLUMNS)}
+
+
+def assign(points, grid: Grid | None = None, *, normalize: str = "bbox", init="random", seed: int = 0,
+           window: int = 6, schedule="halving", ratio: float = 2.0, start_stride=None, rounds_per_stride: int = 1,
+           final_rounds=None, offsets=None, time_budget=None, threads: int = 0, skip_clean: bool = True,
+           tol_rel: float = 1e-12, snapshots: bool = False, solver: str = "hungarian_greedy") -> Result:
+    """Assign every point to its own grid cell, minimizing total squared displacement.
+
+    Parameters
+    ----------
+    points : (N, 2) array
+        Input coordinates (e.g. a UMAP embedding).
+    grid : Grid, optional
+        Target cells.  Defaults to ``Grid.for_count(N)`` (near-square, exactly N cells).
+        With more cells than points the solver also chooses which cells stay empty.
+    normalize : {"bbox", "fit", "none"}
+        How points are mapped into the grid frame (see :func:`normalize_points`).
+    init : {"random", "bisect", "rowsort"} or array
+        Starting assignment.  ``"random"`` is the seeded random permutation of the
+        baseline method.
+    window : int
+        Window side in subgrid cells (baseline 6, i.e. at most 36 cells per window).
+    schedule, start_stride, rounds_per_stride, final_rounds
+        Stride schedule; see :func:`build_schedule`.
+    time_budget : float, optional
+        Wall-clock budget in seconds for the whole call, including normalization and the
+        start.  The best assignment so far is returned when it expires.
+    threads : int
+        Worker threads for the window solves (0 = OpenMP default).  Results do not
+        depend on the thread count.
+    snapshots : bool
+        Keep a copy of the assignment after every stage (for figures).
+    """
+    t_start = time.perf_counter()
+    P = np.asarray(points, dtype=np.float64)
+    N = P.shape[0]
+    if grid is None:
+        grid = Grid.for_count(N)
+    if N > grid.n_cells:
+        raise ValueError(f"{N} points do not fit into {grid.n_cells} cells")
+    Pn = normalize_points(P, grid, normalize)
+    t_norm = time.perf_counter()
+    pos = initial_assignment(Pn, grid, init, seed)
+    t_init = time.perf_counter()
+    stages = build_schedule(grid.width, grid.height, window, schedule, start_stride, rounds_per_stride, final_rounds,
+                            ratio)
+    remaining = None if time_budget is None else max(0.0, float(time_budget) - (t_init - t_start))
+    snaps = []
+    if snapshots:
+        snaps.append(("start", pos.copy()))
+        traces, finished = [], True
+        for si, st in enumerate(stages):
+            t_stage = time.perf_counter()
+            budget = None if remaining is None else max(0.0, remaining - (t_stage - t_init))
+            if budget is not None and budget <= 0:
+                finished = False
+                break
+            tr, fin = run_schedule(Pn, grid, pos, st[None, :], window, offsets, budget, threads, tol_rel, skip_clean,
+                                   solver)
+            tr = tr if si == 0 else tr[1:]
+            tr[:, 0] += t_stage - t_init
+            tr[:, 2] = np.where(tr[:, 2] >= 0, si, tr[:, 2])
+            traces.append(tr)
+            snaps.append((f"stage{si}:s={st[0]}x{st[1]}", pos.copy()))
+            if not fin:
+                finished = False
+                break
+        trace = np.concatenate(traces) if traces else np.zeros((0, len(TRACE_COLUMNS)))
+    else:
+        trace, finished = run_schedule(Pn, grid, pos, stages, window, offsets, remaining, threads, tol_rel, skip_clean,
+                                       solver)
+    t_end = time.perf_counter()
+    if len(trace):
+        trace[:, 0] += t_init - t_start
+    cost = float(_core.assignment_cost(Pn, grid.centers, pos, threads))
+    timings = {
+        "normalize_s": t_norm - t_start,
+        "init_s": t_init - t_norm,
+        "solve_s": t_end - t_init,
+        "total_s": t_end - t_start,
+    }
+    config = dict(normalize=normalize, init=init if isinstance(init, str) else "explicit", seed=seed,
+                  window=window, schedule=schedule if isinstance(schedule, str) else "custom", ratio=ratio,
+                  start_stride=start_stride, rounds_per_stride=rounds_per_stride, final_rounds=final_rounds,
+                  time_budget=time_budget, threads=threads, skip_clean=skip_clean, tol_rel=tol_rel, solver=solver,
+                  stages=stages.tolist())
+    return Result(cell=pos, grid=grid, points=Pn, cost=cost, finished=finished, trace=trace, timings=timings,
+                  config=config, snapshots=snaps)
