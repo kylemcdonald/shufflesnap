@@ -98,12 +98,32 @@ def _mcf(N, M, rows, cols, cint):
     return cell
 
 
+def _neighborhood_edges(grid: Grid, rows: np.ndarray, cells: np.ndarray, radius: int):
+    """Edges from each point in `rows` to the lattice neighbourhood of the matching cell."""
+    lat = grid.lattice[cells]
+    H, W = grid.mask.shape
+    rr, cc = [], []
+    for dy in range(-radius, radius + 1):
+        for dx in range(-radius, radius + 1):
+            x = lat[:, 0] + dx
+            y = lat[:, 1] + dy
+            ok = (x >= 0) & (x < W) & (y >= 0) & (y < H)
+            ids = np.full(len(rows), -1, dtype=np.int64)
+            ids[ok] = grid.index[y[ok], x[ok]]
+            ok &= ids >= 0
+            rr.append(rows[ok])
+            cc.append(ids[ok])
+    return np.concatenate(rr).astype(np.int64), np.concatenate(cc).astype(np.int64)
+
+
 def solve_certified(P: np.ndarray, grid: Grid, cell0: np.ndarray, k: int = 12, radius: int = 2, max_viol: int = 8,
                     max_rounds: int = 50, rel_gap: float = 1e-9, threads: int = 0, block: int = 16,
-                    verbose: bool = False, time_limit: float | None = None) -> dict:
+                    verbose: bool = False, time_limit: float | None = None, expand: int = 1) -> dict:
     """Exact assignment of normalized points ``P`` to ``grid`` with an optimality certificate.
 
-    ``cell0`` is any feasible starting assignment (it seeds the candidate edges).
+    ``cell0`` is any feasible starting assignment (it seeds the candidate edges).  After
+    each pricing pass, violating edges are added together with the ``expand``-radius
+    lattice neighbourhood of every violating point's best-priced cell.
     Returns a dict with ``cell``, ``cost``, ``lower_bound``, ``gap`` (= cost - bound),
     ``certified`` (gap within tolerance), per-round statistics and timings.
     """
@@ -160,7 +180,14 @@ def solve_certified(P: np.ndarray, grid: Grid, cell0: np.ndarray, k: int = 12, r
             break
         if time_limit is not None and time.perf_counter() - t0 > time_limit:
             break
-        key = np.unique(np.concatenate([rows * M + cols, vi.astype(np.int64) * M + vj.astype(np.int64)]))
+        add_r, add_c = vi.astype(np.int64), vj.astype(np.int64)
+        if expand > 0:
+            # also offer each violating point the neighbourhood of its best-priced cell
+            vp = np.unique(add_r)
+            er, ec = _neighborhood_edges(grid, vp, arg[vp], expand)
+            add_r = np.concatenate([add_r, er])
+            add_c = np.concatenate([add_c, ec])
+        key = np.unique(np.concatenate([rows * M + cols, add_r * M + add_c]))
         rows, cols = key // M, key % M
     result["time_s"] = time.perf_counter() - t0
     return result

@@ -2,6 +2,7 @@
 
 from . import _core
 from .api import (
+    PRESETS,
     TRACE_COLUMNS,
     Result,
     assign,
@@ -29,5 +30,6 @@ __all__ = [
     "assignment_cost",
     "displacement_stats",
     "TRACE_COLUMNS",
+    "PRESETS",
     "__version__",
 ]

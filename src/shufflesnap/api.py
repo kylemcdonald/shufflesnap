@@ -19,7 +19,19 @@ __all__ = [
     "initial_assignment",
     "run_schedule",
     "TRACE_COLUMNS",
+    "PRESETS",
 ]
+
+PRESETS = {
+    # the algorithm as originally specified: 6x6 windows, strides halved per level
+    "baseline": dict(window=6, schedule="halving", ratio=2.0),
+    # same cost per level, finer stride sequence (ratio sqrt 2)
+    "fast": dict(window=6, schedule="geometric", ratio=2 ** 0.5),
+    # default: 8x8 windows, ratio sqrt 2
+    "balanced": dict(window=8, schedule="geometric", ratio=2 ** 0.5),
+    # 12x12 windows (144-cell exact solves), ratio sqrt 2
+    "quality": dict(window=12, schedule="geometric", ratio=2 ** 0.5),
+}
 
 TRACE_COLUMNS = (
     "elapsed_s",  # seconds since assign() was called (includes normalization and start)
@@ -199,8 +211,9 @@ class Result:
         return {c: self.trace[:, i] for i, c in enumerate(TRACE_COLUMNS)}
 
 
-def assign(points, grid: Grid | None = None, *, normalize: str = "bbox", init="random", seed: int = 0,
-           window: int = 6, schedule="halving", ratio: float = 2.0, start_stride=None, rounds_per_stride: int = 1,
+def assign(points, grid: Grid | None = None, *, preset: str = "balanced", normalize: str = "bbox", init="random",
+           seed: int = 0, window: int | None = None, schedule=None, ratio: float | None = None, start_stride=None,
+           rounds_per_stride: int = 1,
            final_rounds=None, offsets=None, time_budget=None, threads: int = 0, skip_clean: bool = True,
            tol_rel: float = 1e-12, snapshots: bool = False, solver: str = "hungarian_greedy") -> Result:
     """Assign every point to its own grid cell, minimizing total squared displacement.
@@ -212,14 +225,18 @@ def assign(points, grid: Grid | None = None, *, normalize: str = "bbox", init="r
     grid : Grid, optional
         Target cells.  Defaults to ``Grid.for_count(N)`` (near-square, exactly N cells).
         With more cells than points the solver also chooses which cells stay empty.
+    preset : {"balanced", "baseline", "fast", "quality"}
+        Bundle of ``window``/``schedule``/``ratio`` (see ``PRESETS``); explicit arguments
+        override it.  ``"baseline"`` is the originally specified algorithm (6x6 windows,
+        halving strides); ``"balanced"`` (8x8 windows, stride ratio sqrt 2) is the default.
     normalize : {"bbox", "fit", "none"}
         How points are mapped into the grid frame (see :func:`normalize_points`).
     init : {"random", "bisect", "rowsort"} or array
         Starting assignment.  ``"random"`` is the seeded random permutation of the
         baseline method.
     window : int
-        Window side in subgrid cells (baseline 6, i.e. at most 36 cells per window).
-    schedule, start_stride, rounds_per_stride, final_rounds
+        Window side in subgrid cells (6 means at most 36 cells per window).
+    schedule, ratio, start_stride, rounds_per_stride, final_rounds
         Stride schedule; see :func:`build_schedule`.
     time_budget : float, optional
         Wall-clock budget in seconds for the whole call, including normalization and the
@@ -231,6 +248,13 @@ def assign(points, grid: Grid | None = None, *, normalize: str = "bbox", init="r
         Keep a copy of the assignment after every stage (for figures).
     """
     t_start = time.perf_counter()
+    if preset not in PRESETS:
+        raise ValueError(f"preset must be one of {sorted(PRESETS)}")
+    cfg = PRESETS[preset]
+    window = cfg["window"] if window is None else int(window)
+    if schedule is None:
+        schedule = cfg["schedule"]
+    ratio = cfg["ratio"] if ratio is None else float(ratio)
     P = np.asarray(points, dtype=np.float64)
     N = P.shape[0]
     if grid is None:
@@ -278,7 +302,7 @@ def assign(points, grid: Grid | None = None, *, normalize: str = "bbox", init="r
         "solve_s": t_end - t_init,
         "total_s": t_end - t_start,
     }
-    config = dict(normalize=normalize, init=init if isinstance(init, str) else "explicit", seed=seed,
+    config = dict(preset=preset, normalize=normalize, init=init if isinstance(init, str) else "explicit", seed=seed,
                   window=window, schedule=schedule if isinstance(schedule, str) else "custom", ratio=ratio,
                   start_stride=start_stride, rounds_per_stride=rounds_per_stride, final_rounds=final_rounds,
                   time_budget=time_budget, threads=threads, skip_clean=skip_clean, tol_rel=tol_rel, solver=solver,

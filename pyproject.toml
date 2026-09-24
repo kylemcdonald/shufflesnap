@@ -1,0 +1,51 @@
+[build-system]
+requires = ["scikit-build-core>=0.10", "nanobind>=2.0"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "shufflesnap"
+version = "0.1.0"
+description = "Point-to-grid assignment (e.g. UMAP/t-SNE layouts to image grids) by strided windowed exact reassignment, with an optional certified exact solver"
+readme = "README.md"
+requires-python = ">=3.9"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Kyle McDonald" }]
+keywords = ["linear assignment", "optimal transport", "grid layout", "umap", "t-sne", "visualization"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Science/Research",
+  "Operating System :: OS Independent",
+  "Programming Language :: C++",
+  "Programming Language :: Python :: 3",
+  "Topic :: Scientific/Engineering :: Visualization",
+  "Topic :: Scientific/Engineering :: Mathematics",
+]
+dependencies = ["numpy>=1.21"]
+
+[project.optional-dependencies]
+# certified exact solver (shufflesnap.exact) and neighbourhood metrics
+exact = ["scipy>=1.8", "ortools>=9.8"]
+metrics = ["scipy>=1.8"]
+test = ["pytest>=7", "scipy>=1.8", "ortools>=9.8"]
+
+[tool.scikit-build]
+minimum-version = "build-system.requires"
+build-dir = "build/{wheel_tag}"
+wheel.packages = ["src/shufflesnap"]
+cmake.build-type = "Release"
+sdist.exclude = ["build", "dev_build.sh", ".github"]
+
+[tool.cibuildwheel]
+build = "cp39-* cp310-* cp311-* cp312-* cp313-*"
+skip = "*-win32 *-musllinux_i686 *-manylinux_i686"
+test-extras = ["test"]
+test-command = "pytest {project}/tests -q"
+
+[tool.cibuildwheel.macos]
+# Apple clang has no OpenMP; the build falls back to single-threaded kernels unless
+# libomp is available (e.g. `brew install libomp` and OpenMP_ROOT set).
+environment = { MACOSX_DEPLOYMENT_TARGET = "11.0" }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
