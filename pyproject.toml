@@ -42,6 +42,9 @@ skip = "*-win32 *_i686 cp3??t-*"
 # OR-Tools (the `exact` extra) has no wheels for every platform; its tests skip without it.
 test-requires = ["pytest>=7", "scipy>=1.8"]
 test-command = "pytest {project}/tests -q"
+# SciPy has no musllinux aarch64 wheel for Python 3.9 (it would build from source); the wheel is
+# still built, only its test run is skipped.
+test-skip = "cp39-musllinux_aarch64"
 
 [tool.cibuildwheel.macos]
 # Apple clang has no OpenMP; the build falls back to single-threaded kernels unless
