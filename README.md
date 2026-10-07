@@ -76,8 +76,9 @@ the result, and the result is also independent of the number of threads (both ar
 
 The presets were chosen on development instances (not the benchmark instances) so that
 `fast` and `balanced` take about as long as BSP-OT with 16 and 64 plans (one core,
-100,000 points), which makes the two methods comparable at equal time. Larger windows are
-better in every test but slower; ratio √2 was best or close to best at every window size
+100,000 points), which makes the two methods comparable at equal time. Larger windows end
+closer to the optimum in every test, but take longer to reach any cost that a smaller window
+also reaches, so pick the smallest window whose final cost is good enough; ratio √2 was best or close to best at every window size
 from 6 to 24; windows up to 32 can be set with `window=`.
 
 Explicit arguments (`window=`, `ratio=`, `schedule=`, `rounds_per_stride=`,
