@@ -15,7 +15,7 @@ from .grid import Grid
 from .metrics import assignment_cost, displacement_stats, validate_assignment
 from .normalize import normalize_points
 
-__version__ = "0.1.0"
+__version__ = "0.4.0"
 
 __all__ = [
     "assign",

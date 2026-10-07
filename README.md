@@ -14,6 +14,15 @@ res.xy                               # (N, 2) integer column/row of every point
 res.cost / len(xy)                   # mean squared displacement, in cell units
 ```
 
+## Install
+
+```bash
+pip install shufflesnap            # add [exact] for the certified exact solver
+```
+
+Version 0.4.0 is a rewrite with a new API (`assign`); 0.3.0 and earlier used
+`snap_to_grid`. See the [changelog](CHANGELOG.md).
+
 ## How it works
 
 The algorithm is a coarse-to-fine local search, loosely inspired by Shellsort:

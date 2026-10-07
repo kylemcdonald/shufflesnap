@@ -1,6 +1,11 @@
 # Changelog
 
-## 0.1.0 (unreleased)
+## 0.4.0 (2026-10-06)
+
+Complete rewrite with a new API; not compatible with 0.3.0. `snap_to_grid`,
+`window_cleanup`, `default_stride_schedule` and `linear_sum_assignment` are gone; use
+`shufflesnap.assign(xy, ...)`, which returns a `Result`. Releases up to 0.3.0 remain on PyPI
+and their source is in the Git history (tag `v0.3.0`).
 
 - Strided windowed exact reassignment (C++/OpenMP kernel, nanobind bindings).
 - Presets `fast` (5x5 windows), `balanced` (8x8, default) and `quality` (12x12), all with
