@@ -98,6 +98,49 @@ def test_time_budget():
     assert res.timings["total_s"] < 0.5
 
 
+def test_zero_budget_returns_start_and_invalid_budgets_are_rejected():
+    rng = np.random.default_rng(0)
+    P = rng.random((5000, 2))
+    res = ss.assign(P, time_budget=0.0)
+    assert not res.finished
+    assert len(res.trace) == 1  # the starting assignment only
+    np.testing.assert_array_equal(res.cell, ss.initial_assignment(res.points, res.grid, "random", 0))
+    g = res.grid
+    stages = ss.build_schedule(g.width, g.height)
+    for bad in (-1.0, float("nan")):
+        with pytest.raises(ValueError):
+            ss.assign(P, time_budget=bad)
+        with pytest.raises(ValueError):
+            ss.run_schedule(res.points, g, res.cell.copy(), stages, time_budget=bad)
+
+
+def test_stage_table_validation():
+    rng = np.random.default_rng(0)
+    P = rng.random((100, 2))
+    g = ss.Grid.for_count(100)
+    pos = ss.initial_assignment(P, g)
+    for bad in ([[1, 1, -1, 0]], [[0, 1, 1, 0]], np.zeros((0, 4))):  # never stops / stride 0 / empty
+        with pytest.raises(ValueError):
+            ss.run_schedule(P, g, pos.copy(), bad)
+    tr, finished = ss.run_schedule(P, g, pos.copy(), [[1, 1, -1, 0]], time_budget=0.01)  # bounded by the budget
+    assert not finished
+
+
+def test_mask_can_disconnect_exchanges():
+    """A documented limitation: masks guarantee a valid layout, not that every pair of
+    usable cells shares some scheduled window.  With only columns 0 and 9 usable, stride 2
+    puts them in different residue classes and an 8-wide stride-1 window (the default
+    preset) never holds both."""
+    mask = np.zeros((1, 10), dtype=bool)
+    mask[0, [0, 9]] = True
+    g = ss.Grid.from_mask(mask)
+    P = g.centers.astype(float)  # optimum: every point on its own cell, cost 0
+    for w, expected in ((8, 162.0), (12, 0.0)):  # a 12-wide window contains both cells
+        pos = np.array([1, 0], dtype=np.int32)  # swapped: two moves of 9 cells
+        ss.run_schedule(P, g, pos, ss.build_schedule(g.width, g.height, window=w), window=w)
+        assert ss.assignment_cost(P, g, pos) == expected
+
+
 def test_final_cost_not_above_start_and_windows_locally_optimal():
     # after convergence, re-running a full stride-1 round must not move anything
     rng = np.random.default_rng(7)
@@ -123,21 +166,24 @@ def test_solvers_agree_on_cost_and_validity():
     P = rng.random((5000, 2))
     for g in (ss.Grid.for_count(5000), ss.Grid.for_count(5000, partial="free")):
         a = ss.assign(P, g, solver="hungarian", seed=1)
-        b = ss.assign(P, g, solver="jv", seed=1)
         check(a, 5000)
-        check(b, 5000)
-        # both solvers are exact, so each window reaches the same optimal cost; ties may
-        # be broken differently, so assignments can differ slightly in the end
-        assert abs(a.cost - b.cost) <= 0.02 * a.cost
+        for solver in ("jv", "hungarian_greedy", "auction", "geometric"):
+            b = ss.assign(P, g, solver=solver, seed=1)
+            check(b, 5000)
+            # all solvers are exact, so each window reaches the same optimal cost; ties may
+            # be broken differently, so assignments can differ slightly in the end
+            assert abs(a.cost - b.cost) <= 0.02 * a.cost
 
 
 def test_presets_and_explicit_overrides():
     rng = np.random.default_rng(12)
     P = rng.normal(size=(6000, 2))
-    base = ss.assign(P, preset="baseline", seed=3)
-    explicit = ss.assign(P, preset="balanced", window=6, schedule="halving", seed=3)
-    assert np.array_equal(base.cell, explicit.cell)
-    assert base.config["stages"][0][:2] == [16, 16]
+    fast = ss.assign(P, preset="fast", seed=3)
+    explicit = ss.assign(P, preset="balanced", window=5, seed=3)
+    assert np.array_equal(fast.cell, explicit.cell)
+    halving = ss.assign(P, window=6, schedule="halving", seed=3)
+    assert halving.config["stages"][0][:2] == [16, 16]
+    assert set(ss.PRESETS) == {"fast", "balanced", "quality"}
     for name in ss.PRESETS:
         r = ss.assign(P, preset=name, seed=3)
         check(r, 6000)
@@ -160,7 +206,7 @@ def _rotated_ring(W, H, x0, y0, rw, rh):
 def test_rotated_ring_larger_than_windows_is_a_fixed_point():
     """Documents the central limitation: a closed loop of one-cell shifts that no window
     contains is left untouched at every stride, although the optimum has cost 0."""
-    for w in (6, 8, 12):
+    for w in (5, 6, 8, 12, 16):
         g, P, pos, L = _rotated_ring(64, 48, 10, 10, w + 1, w + 1)
         stages = ss.build_schedule(g.width, g.height, window=w, schedule="geometric", ratio=2 ** 0.5)
         tr, _ = ss.run_schedule(P, g, pos, stages, window=w)
@@ -184,3 +230,12 @@ def test_invalid_explicit_start_is_rejected():
     pos = np.arange(100, dtype=np.int64)
     with pytest.raises(TypeError):
         ss.run_schedule(P, g, pos, ss.build_schedule(g.width, g.height))
+
+
+def test_large_windows_and_window_limit():
+    rng = np.random.default_rng(21)
+    P = rng.normal(size=(3000, 2))
+    res = ss.assign(P, window=24, seed=1)
+    check(res, 3000)
+    with pytest.raises(ValueError):
+        ss.assign(P, window=33)

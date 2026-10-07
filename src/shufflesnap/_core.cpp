@@ -147,6 +147,32 @@ struct Deadline {
     }
 };
 
+// Window LAP solvers by id (see _lap.hpp): 0 Hungarian, 1 Jonker-Volgenant,
+// 2 Hungarian with greedy start, 3 auction with exact Hungarian finish, 4 geometric
+// (quantile Brenier start; uses the coordinates P, C of the window's points and cells,
+// row-major (x, y) pairs, when given).
+struct WindowSolver {
+    int id;
+    LapWork lw;
+    JvWork jw;
+    AuctionWork aw;
+    GeoWork gw;
+    explicit WindowSolver(int solver) : id(solver) {}
+    static void check(int solver) {
+        if (solver < 0 || solver > 4) throw std::invalid_argument("unknown window solver");
+    }
+    double operator()(const double* a, int k, int m, int* row2col, const double* P = nullptr,
+                      const double* C = nullptr) {
+        switch (id) {
+            case 1: return lap_jv(a, k, m, row2col, jw);
+            case 2: return lap_hungarian_greedy(a, k, m, row2col, lw);
+            case 3: return lap_auction(a, k, m, row2col, aw);
+            case 4: return lap_geometric(a, k, m, row2col, gw, P, C);
+            default: return lap_hungarian(a, k, m, row2col, lw);
+        }
+    }
+};
+
 // Solve every window of one phase exactly.  Windows are disjoint, so they are
 // processed in parallel without locks.  A window whose cells have not changed
 // occupant since it was last solved (stamp <= last_solved) is already optimal and
@@ -165,9 +191,8 @@ static PhaseStats run_phase(const Problem& pb, int32_t* occ, int32_t* pos, int64
     {
         std::vector<int32_t> cells(maxc), rows(maxc), curcol(maxc), oldocc(maxc), newocc(maxc);
         std::vector<int> ans(maxc);
-        std::vector<double> cost((size_t)maxc * maxc);
-        LapWork lw;
-        JvWork jw;
+        std::vector<double> cost((size_t)maxc * maxc), pxy(2 * (size_t)maxc), cxy(2 * (size_t)maxc);
+        WindowSolver solve(solver);
         int64_t counter = 0;
 #pragma omp for schedule(dynamic, 8)
         for (int64_t wi = 0; wi < nw; ++wi) {
@@ -196,21 +221,25 @@ static PhaseStats run_phase(const Problem& pb, int32_t* occ, int32_t* pos, int64
             }
             if (k == 0) continue;
             if (skip_clean && last_solved[wi] >= 0 && maxstamp <= last_solved[wi]) continue;
+            for (int c = 0; c < m; ++c) {
+                cxy[2 * c] = pb.C[2 * (int64_t)cells[c]];
+                cxy[2 * c + 1] = pb.C[2 * (int64_t)cells[c] + 1];
+            }
             for (int r = 0; r < k; ++r) {
                 const double px = pb.P[2 * (int64_t)rows[r]];
                 const double py = pb.P[2 * (int64_t)rows[r] + 1];
+                pxy[2 * r] = px;
+                pxy[2 * r + 1] = py;
                 double* crow = cost.data() + (size_t)r * m;
                 for (int c = 0; c < m; ++c) {
-                    const double dx = px - pb.C[2 * (int64_t)cells[c]];
-                    const double dy = py - pb.C[2 * (int64_t)cells[c] + 1];
+                    const double dx = px - cxy[2 * c];
+                    const double dy = py - cxy[2 * c + 1];
                     crow[c] = dx * dx + dy * dy;
                 }
             }
             double cur = 0.0;
             for (int r = 0; r < k; ++r) cur += cost[(size_t)r * m + curcol[r]];
-            const double best = solver == 1   ? lap_jv(cost.data(), k, m, ans.data(), jw)
-                                 : solver == 2 ? lap_hungarian_greedy(cost.data(), k, m, ans.data(), lw)
-                                               : lap_hungarian(cost.data(), k, m, ans.data(), lw);
+            const double best = solve(cost.data(), k, m, ans.data(), pxy.data(), cxy.data());
             ++solved;
             last_solved[wi] = phase_id;
             // Accept only strict improvements beyond rounding noise; ties never move,
@@ -268,7 +297,8 @@ static std::pair<std::vector<double>, bool> run_schedule(
     if ((int64_t)occ.shape(0) != pb.M || (int64_t)pos.shape(0) != pb.N)
         throw std::invalid_argument("occ must have length M and pos length N");
     if (stages.shape(1) != 4 || offsets.shape(1) != 2) throw std::invalid_argument("bad stages/offsets shape");
-    if (window < 1 || window > 16) throw std::invalid_argument("window must be in [1, 16]");
+    if (window < 1 || window > 32) throw std::invalid_argument("window must be in [1, 32]");
+    WindowSolver::check(solver);
     const int nthreads = resolve_threads(threads);
     int32_t* occp = occ.data();
     int32_t* posp = pos.data();
@@ -283,7 +313,9 @@ static std::pair<std::vector<double>, bool> run_schedule(
         nb::gil_scoped_release release;
         const auto t0 = Clock::now();
         Deadline dl;
-        if (time_budget > 0 && std::isfinite(time_budget)) {
+        // A negative budget means "none" (the Python layer passes -1 for None and rejects
+        // other negative values); a zero budget returns the start without running a phase.
+        if (time_budget >= 0 && std::isfinite(time_budget)) {
             dl.active = true;
             dl.t = t0 + std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double>(time_budget));
         }
@@ -400,30 +432,45 @@ static void init_bisect(CArr2<double> P, CArr2<double> C, MArr1<int32_t> pos) {
 static std::pair<std::vector<int>, double> solve_lap(CArr2<double> cost, int solver) {
     const int k = (int)cost.shape(0), m = (int)cost.shape(1);
     if (k > m) throw std::invalid_argument("need rows <= cols");
+    WindowSolver::check(solver);
     std::vector<int> ans(k);
-    LapWork lw;
-    JvWork jw;
+    WindowSolver solve(solver);
     double total = 0.0;
-    if (k)
-        total = solver == 1   ? lap_jv(cost.data(), k, m, ans.data(), jw)
-                : solver == 2 ? lap_hungarian_greedy(cost.data(), k, m, ans.data(), lw)
-                              : lap_hungarian(cost.data(), k, m, ans.data(), lw);
+    if (k) total = solve(cost.data(), k, m, ans.data());
+    return {ans, total};
+}
+
+// One window as the kernel sees it: squared distances from points P (k, 2) to cells C (m, 2),
+// solved with the coordinates available to the solver (for the geometric start).
+static std::pair<std::vector<int>, double> solve_window(CArr2<double> P, CArr2<double> C, int solver) {
+    const int k = (int)P.shape(0), m = (int)C.shape(0);
+    if (P.shape(1) != 2 || C.shape(1) != 2) throw std::invalid_argument("P and C must have shape (n, 2)");
+    if (k > m) throw std::invalid_argument("need points <= cells");
+    WindowSolver::check(solver);
+    std::vector<double> cost((size_t)k * m);
+    for (int r = 0; r < k; ++r)
+        for (int c = 0; c < m; ++c) {
+            const double dx = P.data()[2 * r] - C.data()[2 * c], dy = P.data()[2 * r + 1] - C.data()[2 * c + 1];
+            cost[(size_t)r * m + c] = dx * dx + dy * dy;
+        }
+    std::vector<int> ans(k);
+    WindowSolver solve(solver);
+    double total = 0.0;
+    if (k) total = solve(cost.data(), k, m, ans.data(), P.data(), C.data());
     return {ans, total};
 }
 
 // Time `reps` solves of each cost matrix in a batch (solver micro-benchmark).
 static double bench_lap(CArr1<double> costs, int k, int m, int count, int reps, int solver) {
+    WindowSolver::check(solver);
     std::vector<int> ans(k);
-    LapWork lw;
-    JvWork jw;
+    WindowSolver solve(solver);
     double sink = 0.0;
     const auto t0 = Clock::now();
     for (int r = 0; r < reps; ++r)
         for (int c = 0; c < count; ++c) {
             const double* a = costs.data() + (size_t)c * k * m;
-            sink += solver == 1   ? lap_jv(a, k, m, ans.data(), jw)
-                    : solver == 2 ? lap_hungarian_greedy(a, k, m, ans.data(), lw)
-                                  : lap_hungarian(a, k, m, ans.data(), lw);
+            sink += solve(a, k, m, ans.data());
         }
     const double el = std::chrono::duration<double>(Clock::now() - t0).count();
     return sink == -1.0 ? -1.0 : el;
@@ -564,6 +611,7 @@ NB_MODULE(_core, m) {
           "solver"_a = 0);
     m.def("init_bisect", &init_bisect, "P"_a, "C"_a, "pos"_a);
     m.def("solve_lap", &solve_lap, "cost"_a, "solver"_a = 0);
+    m.def("solve_window", &solve_window, "P"_a, "C"_a, "solver"_a = 0);
     m.def("bench_lap", &bench_lap, "costs"_a, "k"_a, "m"_a, "count"_a, "reps"_a, "solver"_a);
     m.def("assignment_cost", &assignment_cost, "P"_a, "C"_a, "pos"_a, "threads"_a = 0);
     m.def("list_windows", &list_windows, "grid"_a, "sx"_a, "sy"_a, "window"_a, "ox"_a, "oy"_a);

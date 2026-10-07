@@ -69,3 +69,31 @@ def test_certified_on_masks_and_free_cells(grid):
     opt = ss.assignment_cost(res.points, g, exact.solve_dense(res.points, g))
     assert ex["certified"]
     assert np.isclose(ex["cost"], opt, rtol=1e-9)
+
+
+def test_assign_exact_matches_dense():
+    rng = np.random.default_rng(3)
+    n = 600
+    P = np.concatenate([rng.normal(size=(n // 2, 2)) * 0.1, rng.normal(size=(n - n // 2, 2)) * 0.1 + 2])
+    g = ss.Grid.for_count(n, partial="free", aspect=1.3)
+    res = ss.assign(P, g, seed=0, exact=True)
+    ss.validate_assignment(res.cell, n, g)
+    opt = ss.assignment_cost(res.points, g, exact.solve_dense(res.points, g))
+    assert res.certified
+    assert np.isclose(res.cost, opt, rtol=1e-9)
+    assert np.isclose(res.cost, ss.assignment_cost(res.points, g, res.cell))
+    assert res.lower_bound <= opt * (1 + 1e-12) + 1e-9
+    assert res.gap == pytest.approx(res.cost - res.lower_bound)
+    assert res.config["exact_info"]["shufflesnap_cost"] >= res.cost
+    assert res.timings["exact_s"] > 0
+
+
+def test_assign_without_exact_leaves_certificate_empty():
+    res = ss.assign(np.random.default_rng(0).random((100, 2)))
+    assert res.lower_bound is None and res.gap is None and res.certified is None
+    assert res.config["exact"] is False
+
+
+def test_assign_exact_rejects_bad_time_limit():
+    with pytest.raises(ValueError):
+        ss.assign(np.random.default_rng(0).random((100, 2)), exact=True, exact_time_limit=-1)

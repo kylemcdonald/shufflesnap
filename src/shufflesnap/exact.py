@@ -171,7 +171,7 @@ def solve_certified(P: np.ndarray, grid: Grid, cell0: np.ndarray, k: int = 12, r
         if verbose:
             print(st, flush=True)
         result = dict(cell=cell.astype(np.int32), cost=cost, lower_bound=float(lb), gap=float(gap),
-                      certified=bool(gap <= tol and len(vi) == 0) or bool(gap <= tol), tolerance=tol,
+                      certified=bool(gap <= tol), tolerance=tol,
                       rounds=stats)
         if gap <= tol:
             break
